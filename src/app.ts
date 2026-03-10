@@ -398,7 +398,7 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
   }
   const genericOauthStateStore = new GenericOauthRequestStateStore(config.sessionSigningKey);
   const authorizationCodeStore = new AuthorizationCodeStore(undefined, authorizationCodeCoordinator);
-  const refreshGrantStore = oauthKv ? new OAuthRefreshStore(oauthKv, config.sessionSigningKey) : undefined;
+  const refreshGrantStore = oauthKv ? new OAuthRefreshStore(oauthKv, config.sessionSigningKey, authorizationCodeCoordinator) : undefined;
   const sessionRevocationStore = providedSessionRevocationStore || (oauthKv ? new SessionRevocationStore(oauthKv) : undefined);
   const rateLimiter = new FixedWindowRateLimiter(config.rateLimitWindowSeconds * 1000);
   const routes: Array<{ method: string; pattern: RegExp; handler: RouteHandler }> = [];

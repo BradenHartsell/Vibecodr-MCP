@@ -26,10 +26,39 @@ type ConsumePayload = {
   code: string;
 };
 
+type RefreshBeginPayload = {
+  token: string;
+  pendingTtlMs?: number;
+};
+
+type RefreshCompletePayload = {
+  token: string;
+  replayTtlMs?: number;
+  response: RefreshReplayResponse;
+};
+
+type RefreshReplayResponse = {
+  client_id: string;
+  access_token: string;
+  token_type: "Bearer";
+  expires_in: number;
+  scope: string;
+  refresh_token?: string;
+};
+
 type StoredCodeRecord<TRecord> = {
   record: TRecord;
   expiresAt: number;
 };
+
+type StoredRefreshRecord =
+  | { kind: "pending"; expiresAt: number }
+  | { kind: "replay"; expiresAt: number; response: RefreshReplayResponse };
+
+type RefreshBeginResult =
+  | { state: "leader" }
+  | { state: "wait" }
+  | { state: "replay"; response: RefreshReplayResponse };
 
 function jsonResponse(status: number, body?: Record<string, unknown>): Response {
   return new Response(JSON.stringify(body), {
@@ -48,6 +77,20 @@ async function parseJson<T>(req: Request): Promise<T | null> {
 
 export class AuthorizationCodeCoordinator {
   constructor(private readonly state: DurableObjectStateLike) {}
+
+  private refreshKey(token: string): string {
+    return "refresh:" + token;
+  }
+
+  private async readRefreshRecord(token: string): Promise<StoredRefreshRecord | null> {
+    const record = await this.state.storage.get<StoredRefreshRecord>(this.refreshKey(token));
+    if (!record) return null;
+    if (record.expiresAt < Date.now()) {
+      await this.state.storage.delete(this.refreshKey(token));
+      return null;
+    }
+    return record;
+  }
 
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
@@ -84,6 +127,64 @@ export class AuthorizationCodeCoordinator {
       return jsonResponse(200, { record: stored.record as Record<string, unknown> });
     }
 
+    if (req.method === "POST" && url.pathname === "/refresh/begin") {
+      const payload = await parseJson<RefreshBeginPayload>(req);
+      if (!payload || typeof payload.token !== "string" || !payload.token) {
+        return jsonResponse(400, { error: "INVALID_REFRESH_BEGIN_REQUEST" });
+      }
+      const existing = await this.readRefreshRecord(payload.token);
+      if (existing?.kind === "replay") {
+        return jsonResponse(200, { state: "replay", response: existing.response });
+      }
+      if (existing?.kind === "pending") {
+        return jsonResponse(200, { state: "wait" });
+      }
+      const pendingTtlMs = typeof payload.pendingTtlMs === "number" && Number.isFinite(payload.pendingTtlMs)
+        ? Math.max(payload.pendingTtlMs, 1_000)
+        : 15_000;
+      await this.state.storage.put(this.refreshKey(payload.token), {
+        kind: "pending",
+        expiresAt: Date.now() + pendingTtlMs
+      } satisfies StoredRefreshRecord);
+      return jsonResponse(200, { state: "leader" });
+    }
+
+    if (req.method === "POST" && url.pathname === "/refresh/complete") {
+      const payload = await parseJson<RefreshCompletePayload>(req);
+      if (
+        !payload ||
+        typeof payload.token !== "string" ||
+        !payload.token ||
+        !payload.response ||
+        typeof payload.response !== "object" ||
+        typeof payload.response.client_id !== "string" ||
+        typeof payload.response.access_token !== "string" ||
+        typeof payload.response.token_type !== "string" ||
+        typeof payload.response.expires_in !== "number" ||
+        typeof payload.response.scope !== "string"
+      ) {
+        return jsonResponse(400, { error: "INVALID_REFRESH_COMPLETE_REQUEST" });
+      }
+      const replayTtlMs = typeof payload.replayTtlMs === "number" && Number.isFinite(payload.replayTtlMs)
+        ? Math.max(payload.replayTtlMs, 1_000)
+        : 120_000;
+      await this.state.storage.put(this.refreshKey(payload.token), {
+        kind: "replay",
+        expiresAt: Date.now() + replayTtlMs,
+        response: payload.response
+      } satisfies StoredRefreshRecord);
+      return new Response(null, { status: 204 });
+    }
+
+    if (req.method === "POST" && (url.pathname === "/refresh/fail" || url.pathname === "/refresh/clear")) {
+      const payload = await parseJson<RefreshBeginPayload>(req);
+      if (!payload || typeof payload.token !== "string" || !payload.token) {
+        return jsonResponse(400, { error: "INVALID_REFRESH_CLEAR_REQUEST" });
+      }
+      await this.state.storage.delete(this.refreshKey(payload.token));
+      return new Response(null, { status: 204 });
+    }
+
     return jsonResponse(404, { error: "NOT_FOUND" });
   }
 }
@@ -118,5 +219,59 @@ export class AuthorizationCodeCoordinatorClient<TRecord> {
     }
     const payload = (await response.json()) as { record?: TRecord | null };
     return payload.record ?? null;
+  }
+}
+
+export class RefreshReplayCoordinatorClient {
+  constructor(private readonly namespace: AuthorizationCodeCoordinatorNamespaceLike) {}
+
+  private stubFor(token: string) {
+    const id = this.namespace.idFromName("oauth-refresh:" + token.slice(0, 12));
+    return this.namespace.get(id);
+  }
+
+  async begin(token: string, pendingTtlMs: number): Promise<RefreshBeginResult> {
+    const response = await this.stubFor(token).fetch("https://auth-coordinator/refresh/begin", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token, pendingTtlMs })
+    });
+    if (!response.ok) {
+      throw new Error("Authorization code coordinator failed to begin refresh rotation.");
+    }
+    return (await response.json()) as RefreshBeginResult;
+  }
+
+  async complete(token: string, replayTtlMs: number, responsePayload: RefreshReplayResponse): Promise<void> {
+    const response = await this.stubFor(token).fetch("https://auth-coordinator/refresh/complete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token, replayTtlMs, response: responsePayload })
+    });
+    if (response.status !== 204) {
+      throw new Error("Authorization code coordinator failed to complete refresh rotation.");
+    }
+  }
+
+  async fail(token: string): Promise<void> {
+    const response = await this.stubFor(token).fetch("https://auth-coordinator/refresh/fail", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token })
+    });
+    if (response.status !== 204) {
+      throw new Error("Authorization code coordinator failed to clear refresh rotation state.");
+    }
+  }
+
+  async clear(token: string): Promise<void> {
+    const response = await this.stubFor(token).fetch("https://auth-coordinator/refresh/clear", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token })
+    });
+    if (response.status !== 204) {
+      throw new Error("Authorization code coordinator failed to clear refresh replay state.");
+    }
   }
 }

@@ -66,6 +66,10 @@ type ToolDescriptor = {
   _meta?: Record<string, unknown>;
 };
 
+type ToolPresentationOptions = {
+  supportsUi?: boolean;
+};
+
 const NOAUTH_SECURITY_SCHEMES = [{ type: "noauth" }];
 const OAUTH_TOOL_SCOPES = ["openid", "profile", "email", "offline_access"];
 const OAUTH_SECURITY_SCHEMES = [{ type: "oauth2", scopes: OAUTH_TOOL_SCOPES }];
@@ -229,6 +233,24 @@ function toolMetaBase(
     : { securitySchemes };
 }
 
+function stripWidgetMeta<T extends Record<string, unknown> | undefined>(meta: T): T {
+  if (!meta) return meta;
+  const sanitized = { ...meta };
+  delete sanitized["ui"];
+  delete sanitized["openai/outputTemplate"];
+  delete sanitized["openai/toolInvocation/invoking"];
+  delete sanitized["openai/toolInvocation/invoked"];
+  return sanitized as T;
+}
+
+function sanitizeToolDescriptorForPresentation(descriptor: ToolDescriptor, options?: ToolPresentationOptions): ToolDescriptor {
+  if (options?.supportsUi !== false) return descriptor;
+  return {
+    ...descriptor,
+    _meta: stripWidgetMeta(descriptor._meta)
+  };
+}
+
 function stripOutputSchemaFromDescriptor(descriptor: ToolDescriptor): ToolDescriptor {
   const { outputSchema: _outputSchema, ...rest } = descriptor;
   return rest;
@@ -241,6 +263,14 @@ function withWidgetTemplateMeta(result: ToolResult): ToolResult {
       "openai/outputTemplate": "ui://widget/publisher-v1",
       ...(result._meta || {})
     }
+  };
+}
+
+function sanitizeToolResultForPresentation(result: ToolResult, options?: ToolPresentationOptions): ToolResult {
+  if (options?.supportsUi !== false) return result;
+  return {
+    ...result,
+    _meta: stripWidgetMeta(result._meta)
   };
 }
 
@@ -1830,7 +1860,7 @@ function withValidatedStructuredContent(toolName: string, result: ToolResult): T
   };
 }
 
-export function getTools(options?: { includeOutputSchema?: boolean }): ToolDescriptor[] {
+export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?: boolean }): ToolDescriptor[] {
   const tools: ToolDescriptor[] = [
     {
       name: "get_vibecodr_platform_overview",
@@ -2283,7 +2313,8 @@ export function getTools(options?: { includeOutputSchema?: boolean }): ToolDescr
     }
   ];
 
-  return options?.includeOutputSchema ? tools : tools.map(stripOutputSchemaFromDescriptor);
+  const presented = tools.map((tool) => sanitizeToolDescriptorForPresentation(tool, options));
+  return options?.includeOutputSchema ? presented : presented.map(stripOutputSchemaFromDescriptor);
 }
 
 async function callToolImpl(
@@ -3095,9 +3126,11 @@ export async function callTool(
   deps: ToolDeps,
   name: string,
   args: Record<string, unknown>,
-  sessionOverride?: SessionRecord | null
+  sessionOverride?: SessionRecord | null,
+  presentation?: ToolPresentationOptions
 ): Promise<ToolResult> {
   const result = withValidatedStructuredContent(name, await callToolImpl(req, deps, name, args, sessionOverride));
-  return WIDGET_ENABLED_TOOLS.has(name) ? withWidgetTemplateMeta(result) : result;
+  const widgetWrapped = WIDGET_ENABLED_TOOLS.has(name) ? withWidgetTemplateMeta(result) : result;
+  return sanitizeToolResultForPresentation(widgetWrapped, presentation);
 }
 

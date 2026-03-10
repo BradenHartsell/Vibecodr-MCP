@@ -91,6 +91,154 @@ test("production worker initialize responds with the current MCP protocol versio
   };
   assert.equal(body.result?.protocolVersion, "2025-11-25");
   assert.equal(body.result?.capabilities?.tools?.listChanged, false);
+  assert.equal(Object.prototype.hasOwnProperty.call(body.result?.capabilities || {}, "resources"), false);
+});
+
+test("production worker hides widget resources and widget metadata from generic MCP clients", async () => {
+  const initialize = await worker.fetch(
+    new Request("https://openai.vibecodr.space/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: {
+            name: "codex",
+            version: "1.0.0"
+          }
+        }
+      })
+    }),
+    productionEnv()
+  );
+
+  const sessionId = initialize.headers.get("mcp-session-id");
+  assert.equal(typeof sessionId, "string");
+  assert.ok(sessionId);
+
+  const toolsResponse = await worker.fetch(
+    new Request("https://openai.vibecodr.space/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-11-25",
+        "mcp-session-id": sessionId!
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/list",
+        params: {}
+      })
+    }),
+    productionEnv()
+  );
+
+  assert.equal(toolsResponse.status, 200);
+  const toolsBody = await toolsResponse.json() as {
+    result?: {
+      tools?: Array<{ name?: string; _meta?: Record<string, unknown> }>;
+    };
+  };
+  const quickPublish = toolsBody.result?.tools?.find((tool) => tool.name === "quick_publish_creation");
+  assert.equal(Object.prototype.hasOwnProperty.call(quickPublish?._meta || {}, "openai/outputTemplate"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(quickPublish?._meta || {}, "ui"), false);
+
+  const resourcesResponse = await worker.fetch(
+    new Request("https://openai.vibecodr.space/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-11-25",
+        "mcp-session-id": sessionId!
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "resources/list",
+        params: {}
+      })
+    }),
+    productionEnv()
+  );
+
+  assert.equal(resourcesResponse.status, 200);
+  const resourcesBody = await resourcesResponse.json() as {
+    result?: { resources?: unknown[] };
+  };
+  assert.deepEqual(resourcesBody.result?.resources, []);
+});
+
+test("production worker exposes widget resources to UI-capable hosts", async () => {
+  const initialize = await worker.fetch(
+    new Request("https://openai.vibecodr.space/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {
+            extensions: {
+              "io.modelcontextprotocol/ui": {
+                mimeTypes: ["text/html"]
+              }
+            }
+          },
+          clientInfo: {
+            name: "chatgpt",
+            version: "1.0.0"
+          }
+        }
+      })
+    }),
+    productionEnv()
+  );
+
+  const initializeBody = await initialize.json() as {
+    result?: { capabilities?: { resources?: { listChanged?: boolean } } };
+  };
+  assert.equal(initializeBody.result?.capabilities?.resources?.listChanged, false);
+
+  const sessionId = initialize.headers.get("mcp-session-id");
+  assert.equal(typeof sessionId, "string");
+  assert.ok(sessionId);
+
+  const resourcesResponse = await worker.fetch(
+    new Request("https://openai.vibecodr.space/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-11-25",
+        "mcp-session-id": sessionId!
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "resources/list",
+        params: {}
+      })
+    }),
+    productionEnv()
+  );
+
+  assert.equal(resourcesResponse.status, 200);
+  const resourcesBody = await resourcesResponse.json() as {
+    result?: {
+      resources?: Array<{ uri?: string }>;
+    };
+  };
+  assert.equal(resourcesBody.result?.resources?.[0]?.uri, "ui://widget/publisher-v1");
 });
 
 test("production worker returns a structured auth challenge for protected tool calls without a session", async () => {

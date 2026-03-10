@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { AppConfig } from "../config.js";
 import type { KvNamespaceLike } from "../storage/operationStoreKv.js";
-import { OAuthRefreshStore } from "./oauthRefreshStore.js";
+import { OAuthRefreshStore, type RefreshReplayResponse } from "./oauthRefreshStore.js";
 import { SessionStore } from "./sessionStore.js";
 import { exchangeProviderAccessForVibecodr } from "./vibecodrTokenExchange.js";
 import { buildOfficialMcpClientMetadata, isOfficialMcpClientId } from "./officialMcpClient.js";
@@ -732,6 +732,27 @@ function oauthError(status: number, error: string, description: string, headers?
   return jsonResponse(status, { error, error_description: description }, corsHeaders(headers));
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function awaitRefreshLeader(
+  refreshStore: OAuthRefreshStore,
+  refreshToken: string
+): Promise<
+  | { kind: "leader" }
+  | { kind: "replay"; response: RefreshReplayResponse }
+  | { kind: "timed_out" }
+> {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const state = await refreshStore.beginRefresh(refreshToken);
+    if (state.state === "leader") return { kind: "leader" };
+    if (state.state === "replay") return { kind: "replay", response: state.response };
+    await delay(50);
+  }
+  return { kind: "timed_out" };
+}
+
 export async function handleGatewayMetadata(
   config: AppConfig,
   httpFetch: HttpFetch = fetch
@@ -1022,16 +1043,51 @@ export async function handleGatewayToken(
     if (!refreshStore) return oauthError(503, "server_error", "Refresh token support is unavailable.");
     const refreshToken = form.get("refresh_token") || "";
     if (!refreshToken) return oauthError(400, "invalid_request", "refresh_token is required.");
+    const refreshState = await awaitRefreshLeader(refreshStore, refreshToken);
+    if (refreshState.kind === "replay") {
+      const { clientId: requestedClientId, clientSecret } = resolveTokenClientCredentials(req, form);
+      const replayClientId = requestedClientId || refreshState.response.client_id;
+      if (replayClientId !== refreshState.response.client_id) {
+        return oauthError(400, "invalid_grant", "Refresh token does not match the client.");
+      }
+      const replayClient = resolveKnownClient(config, replayClientId);
+      const replayStaticClient = isStaticClientId(config, replayClientId);
+      if (!replayClient && !replayStaticClient) return oauthError(401, "invalid_client", "Unknown client_id.");
+      if (replayStaticClient && staticClientRequiresSecret(config) && !validateStaticClientSecret(config, clientSecret)) {
+        return oauthError(401, "invalid_client", "Client authentication failed.");
+      }
+      return jsonResponse(200, {
+        access_token: refreshState.response.access_token,
+        token_type: refreshState.response.token_type,
+        expires_in: refreshState.response.expires_in,
+        scope: refreshState.response.scope,
+        ...(refreshState.response.refresh_token ? { refresh_token: refreshState.response.refresh_token } : {})
+      }, corsHeaders({ "pragma": "no-cache" }));
+    }
+    if (refreshState.kind === "timed_out") {
+      return oauthError(503, "temporarily_unavailable", "Refresh retry is already in progress. Retry once.");
+    }
+
     const grant = await refreshStore.get(refreshToken);
-    if (!grant) return oauthError(400, "invalid_grant", "Refresh token is invalid or expired.");
+    if (!grant) {
+      await refreshStore.failRefresh(refreshToken);
+      return oauthError(400, "invalid_grant", "Refresh token is invalid or expired.");
+    }
 
     const { clientId: requestedClientId, clientSecret } = resolveTokenClientCredentials(req, form);
     const clientId = requestedClientId || grant.client_id;
-    if (clientId !== grant.client_id) return oauthError(400, "invalid_grant", "Refresh token does not match the client.");
+    if (clientId !== grant.client_id) {
+      await refreshStore.failRefresh(refreshToken);
+      return oauthError(400, "invalid_grant", "Refresh token does not match the client.");
+    }
     const client = resolveKnownClient(config, clientId);
     const staticClient = isStaticClientId(config, clientId);
-    if (!client && !staticClient) return oauthError(401, "invalid_client", "Unknown client_id.");
+    if (!client && !staticClient) {
+      await refreshStore.failRefresh(refreshToken);
+      return oauthError(401, "invalid_client", "Unknown client_id.");
+    }
     if (staticClient && staticClientRequiresSecret(config) && !validateStaticClientSecret(config, clientSecret)) {
+      await refreshStore.failRefresh(refreshToken);
       return oauthError(401, "invalid_client", "Client authentication failed.");
     }
 
@@ -1055,11 +1111,14 @@ export async function handleGatewayToken(
     if (!tokenRes.ok) {
       if (tokenJson.error === "invalid_grant") {
         await refreshStore.revoke(refreshToken);
+        await refreshStore.failRefresh(refreshToken);
         return oauthError(400, "invalid_grant", "Refresh token is invalid or expired.");
       }
+      await refreshStore.failRefresh(refreshToken);
       return oauthError(502, "server_error", "Refresh token exchange with identity provider failed.");
     }
     if (typeof tokenJson.access_token !== "string") {
+      await refreshStore.failRefresh(refreshToken);
       return oauthError(502, "server_error", "Refreshed token response missing access_token.");
     }
 
@@ -1072,6 +1131,7 @@ export async function handleGatewayToken(
         req.headers.get("x-trace-id") || undefined
       );
     } catch {
+      await refreshStore.failRefresh(refreshToken);
       return oauthError(502, "server_error", "Token exchange with Vibecodr failed.");
     }
 
@@ -1089,6 +1149,16 @@ export async function handleGatewayToken(
       deriveGatewayTokenTtlSeconds(vibecodrToken.expires_at),
       vibecodrToken.user_handle
     );
+
+    const refreshResponse: RefreshReplayResponse = {
+      client_id: grant.client_id,
+      access_token: issued.signedToken,
+      token_type: "Bearer",
+      expires_in: Math.max(Math.floor((issued.session.expiresAt - Date.now()) / 1000), 60),
+      scope: typeof tokenJson.scope === "string" ? tokenJson.scope : grant.requested_scope,
+      ...(rotatedRefreshToken ? { refresh_token: rotatedRefreshToken } : {})
+    };
+    await refreshStore.completeRefresh(refreshToken, refreshResponse);
 
     return jsonResponse(200, {
       access_token: issued.signedToken,

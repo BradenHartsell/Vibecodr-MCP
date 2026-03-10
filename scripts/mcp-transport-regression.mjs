@@ -119,7 +119,10 @@ async function main() {
   const initializeJson = await readJson(initializeResponse);
   assert.equal(initializeJson.result.protocolVersion, CURRENT_PROTOCOL_VERSION);
   assert.equal(initializeJson.result.capabilities.tools.listChanged, false);
-  assert.equal(initializeJson.result.capabilities.resources.listChanged, false);
+  assert.equal(Object.prototype.hasOwnProperty.call(initializeJson.result.capabilities, "resources"), false);
+  const sessionId = initializeResponse.headers.get("mcp-session-id");
+  assert.equal(typeof sessionId, "string");
+  assert.ok(sessionId);
 
   const fallbackInitializeResponse = await handler(new Request("https://openai.vibecodr.space/mcp", {
     method: "POST",
@@ -139,7 +142,8 @@ async function main() {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "mcp-protocol-version": CURRENT_PROTOCOL_VERSION
+      "mcp-protocol-version": CURRENT_PROTOCOL_VERSION,
+      "mcp-session-id": sessionId
     },
     body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })
   }));
@@ -149,7 +153,8 @@ async function main() {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "mcp-protocol-version": CURRENT_PROTOCOL_VERSION
+      "mcp-protocol-version": CURRENT_PROTOCOL_VERSION,
+      "mcp-session-id": sessionId
     },
     body: JSON.stringify({ jsonrpc: "2.0", id: 7, result: {} })
   }));
@@ -159,7 +164,8 @@ async function main() {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "mcp-protocol-version": CURRENT_PROTOCOL_VERSION
+      "mcp-protocol-version": CURRENT_PROTOCOL_VERSION,
+      "mcp-session-id": sessionId
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
@@ -175,7 +181,8 @@ async function main() {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "mcp-protocol-version": CURRENT_PROTOCOL_VERSION
+      "mcp-protocol-version": CURRENT_PROTOCOL_VERSION,
+      "mcp-session-id": sessionId
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
@@ -205,7 +212,11 @@ async function main() {
 
   const batchPayload = await handler(new Request("https://openai.vibecodr.space/mcp", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "mcp-protocol-version": CURRENT_PROTOCOL_VERSION,
+      "mcp-session-id": sessionId
+    },
     body: JSON.stringify([
       { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
       { jsonrpc: "2.0", id: 2, method: "resources/list", params: {} }
@@ -218,7 +229,9 @@ async function main() {
   const batchToolsSize = Buffer.byteLength(JSON.stringify(batchJson.find((item) => item.id === 1)));
   assert.ok(batchToolsSize < 60_000, "tools/list payload should stay compact for connector refresh");
   const toolsResult = batchJson.find((item) => item.id === 1)?.result?.tools || [];
+  const resourcesResult = batchJson.find((item) => item.id === 2)?.result?.resources || [];
   assert.ok(Array.isArray(toolsResult) && toolsResult.length > 0);
+  assert.deepEqual(resourcesResult, []);
   assert.equal("outputSchema" in toolsResult[0], false);
   const protectedTool = toolsResult.find((tool) => tool.name === "get_account_capabilities");
   assert.deepEqual(protectedTool?.securitySchemes, [{ type: "oauth2", scopes: ["openid", "profile", "email", "offline_access"] }]);
@@ -228,7 +241,7 @@ async function main() {
   assert.equal(metadataTool?.inputSchema?.properties?.thumbnailFile?.required?.includes("fileId"), true);
   assert.equal(Boolean(metadataTool?._meta?.["openai/outputTemplate"]), false, "live vibe metadata updates should stay on the compact native card");
   const quickPublishTool = toolsResult.find((tool) => tool.name === "quick_publish_creation");
-  assert.equal(quickPublishTool?._meta?.["openai/outputTemplate"], "ui://widget/publisher-v1");
+  assert.equal(Boolean(quickPublishTool?._meta?.["openai/outputTemplate"]), false, "generic MCP clients should not receive widget templates");
   assert.equal(quickPublishTool?.inputSchema?.properties?.thumbnailFile?.required?.includes("downloadUrl"), true);
 
   const launchGuidance = await handler(new Request("https://openai.vibecodr.space/mcp", {

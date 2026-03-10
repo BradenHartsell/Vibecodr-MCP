@@ -19,6 +19,7 @@ Expected session behavior:
 - the initial MCP access token is short-lived, about 1 hour
 - the gateway also issues a refresh token when `offline_access` is present
 - clients such as Codex should refresh automatically, so the login should persist instead of disappearing after a few minutes
+- official first-party installs and other native/public clients should tolerate a short duplicate refresh on startup or reconnect without burning the session
 - if the client sends the user back through sign-in, treat that as a refresh-path bug or an upstream revocation event
 
 ## Shared expectations
@@ -237,6 +238,11 @@ The Vibecodr gateway now exposes:
 - \`POST /revoke\`
 
 The official Vibecodr CLI can use the committed URL-based client metadata document at `/.well-known/oauth-client/vibecodr-mcp.json`. Other generic clients can dynamically register and authenticate through the gateway. In both cases, the gateway delegates the actual user login to Clerk.
+
+For downloaded CLI wrappers and one-command npm installers, the important server-side contract is:
+- refresh tokens are still rotated
+- the just-used token can replay the successful refresh response for a short window
+- duplicate startup or reconnect refresh attempts should not force immediate re-authentication
 
 ## Troubleshooting
 

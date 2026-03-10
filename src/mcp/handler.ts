@@ -28,9 +28,17 @@ type McpHandlerOptions = {
   maxRequestBodyBytes?: number;
 };
 
+type ClientPresentationState = {
+  supportsUi: boolean;
+  expiresAt: number;
+};
+
 const DEFAULT_MAX_REQUEST_BODY_BYTES = 1_500_000;
 const LATEST_PROTOCOL_VERSION = "2025-11-25";
 const DEFAULT_FALLBACK_PROTOCOL_VERSION = LATEST_PROTOCOL_VERSION;
+const MCP_SESSION_HEADER = "mcp-session-id";
+const UI_EXTENSION_KEY = "io.modelcontextprotocol/ui";
+const CLIENT_PRESENTATION_TTL_MS = 60 * 60 * 1000;
 const SUPPORTED_PROTOCOL_VERSIONS = new Set([
   LATEST_PROTOCOL_VERSION,
   "2025-06-18",
@@ -38,6 +46,7 @@ const SUPPORTED_PROTOCOL_VERSIONS = new Set([
   "2024-11-05",
   "2024-10-07"
 ]);
+const clientPresentationSessions = new Map<string, ClientPresentationState>();
 
 function parseContentLength(req: Request): number | undefined {
   const raw = req.headers.get("content-length");
@@ -109,6 +118,62 @@ function parseRequestParams(payload: JsonRpcRequest): Record<string, unknown> {
 function negotiatedProtocolVersion(requested?: string): string {
   if (requested && SUPPORTED_PROTOCOL_VERSIONS.has(requested)) return requested;
   return DEFAULT_FALLBACK_PROTOCOL_VERSION;
+}
+
+function pruneExpiredClientPresentationSessions(now = Date.now()): void {
+  for (const [sessionId, state] of clientPresentationSessions.entries()) {
+    if (state.expiresAt <= now) clientPresentationSessions.delete(sessionId);
+  }
+}
+
+function readUiExtensionCapability(params: Record<string, unknown>): boolean {
+  const capabilities = params["capabilities"];
+  if (!isRecord(capabilities)) return false;
+  const extensions = capabilities["extensions"];
+  if (!isRecord(extensions)) return false;
+  return isRecord(extensions[UI_EXTENSION_KEY]);
+}
+
+function requestOriginSupportsUi(req: Request): boolean {
+  for (const headerName of ["origin", "referer"]) {
+    const raw = req.headers.get(headerName);
+    if (!raw) continue;
+    try {
+      const host = new URL(raw).hostname.toLowerCase();
+      if (host === "chatgpt.com" || host.endsWith(".chatgpt.com") || host === "chat.openai.com") {
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+function getClientPresentationForRequest(req: Request, params?: Record<string, unknown>): ClientPresentationState {
+  pruneExpiredClientPresentationSessions();
+  const sessionId = req.headers.get(MCP_SESSION_HEADER)?.trim();
+  if (sessionId) {
+    const state = clientPresentationSessions.get(sessionId);
+    if (state) return state;
+  }
+  return {
+    supportsUi: requestOriginSupportsUi(req) || (params ? readUiExtensionCapability(params) : false),
+    expiresAt: Date.now() + CLIENT_PRESENTATION_TTL_MS
+  };
+}
+
+function storeClientPresentationForInitialize(req: Request, params: Record<string, unknown>): {
+  sessionId: string;
+  state: ClientPresentationState;
+} {
+  const sessionId = crypto.randomUUID();
+  const state = {
+    supportsUi: requestOriginSupportsUi(req) || readUiExtensionCapability(params),
+    expiresAt: Date.now() + CLIENT_PRESENTATION_TTL_MS
+  };
+  clientPresentationSessions.set(sessionId, state);
+  return { sessionId, state };
 }
 
 function validateProtocolVersionHeader(req: Request, payload: JsonRpcRequest, traceId: string): Response | undefined {
@@ -291,6 +356,13 @@ export async function handleMcpRequest(
         ? String(params["protocolVersion"])
         : undefined;
       const protocolVersion = negotiatedProtocolVersion(requestedProtocolVersion);
+      const presentation = storeClientPresentationForInitialize(req, params);
+      const initializeCapabilities: Record<string, unknown> = {
+        tools: { listChanged: false }
+      };
+      if (presentation.state.supportsUi) {
+        initializeCapabilities["resources"] = { listChanged: false };
+      }
       deps.telemetry.tool({
         traceId,
         toolName: "mcp.initialize",
@@ -303,12 +375,9 @@ export async function handleMcpRequest(
         result: {
           protocolVersion,
           serverInfo: { name: "vibecodr-openai-app", version: "0.2.0" },
-          capabilities: {
-            tools: { listChanged: false },
-            resources: { listChanged: false }
-          }
+          capabilities: initializeCapabilities
         }
-      }, { "x-trace-id": traceId, "cache-control": "no-store" });
+      }, { "x-trace-id": traceId, "cache-control": "no-store", [MCP_SESSION_HEADER]: presentation.sessionId });
     }
 
     if (method === "ping") {
@@ -322,6 +391,7 @@ export async function handleMcpRequest(
     }
 
     if (method === "tools/list") {
+      const presentation = getClientPresentationForRequest(req, params);
       deps.telemetry.tool({
         traceId,
         toolName: "mcp.tools.list",
@@ -330,12 +400,13 @@ export async function handleMcpRequest(
       });
       return jsonResponse(
         200,
-        { jsonrpc: "2.0", id, result: { tools: getTools({ includeOutputSchema: false }) } },
+        { jsonrpc: "2.0", id, result: { tools: getTools({ includeOutputSchema: false, supportsUi: presentation.supportsUi }) } },
         { "x-trace-id": traceId, "cache-control": "no-store" }
       );
     }
 
     if (method === "tools/call") {
+      const presentation = getClientPresentationForRequest(req, params);
       const name = String(params["name"] || "");
       const args =
         params["arguments"] && typeof params["arguments"] === "object" && !Array.isArray(params["arguments"])
@@ -381,7 +452,7 @@ export async function handleMcpRequest(
           }
         );
       }
-      const result = await callTool(req, deps, name, args, session);
+      const result = await callTool(req, deps, name, args, session, { supportsUi: presentation.supportsUi });
       const outcome = result._meta?.["mcp/www_authenticate"] ? "challenge" : result.structuredContent && typeof result.structuredContent === "object" && !Array.isArray(result.structuredContent) && typeof (result.structuredContent as Record<string, unknown>)["error"] === "string"
         ? "failure"
         : "success";
@@ -399,6 +470,7 @@ export async function handleMcpRequest(
     }
 
     if (method === "resources/list") {
+      const presentation = getClientPresentationForRequest(req, params);
       deps.telemetry.tool({
         traceId,
         toolName: "mcp.resources.list",
@@ -409,27 +481,30 @@ export async function handleMcpRequest(
         jsonrpc: "2.0",
         id,
         result: {
-          resources: [
-            {
-              uri: "ui://widget/publisher-v1",
-              name: "Vibecodr.Space",
-              mimeType: "text/html;profile=mcp-app",
-              _meta: {
-                ui: { uri: "ui://widget/publisher-v1", domain: widgetDomain },
-                "openai/widgetDescription":
-                  "Vibecodr.Space is a social platform where code runs as content. This widget supports a guided publish flow: connect once, answer only the missing launch questions, and publish the generated app as a live, remixable vibe on the timeline.",
-                "openai/widgetPrefersBorder": true,
-                "openai/widgetDomain": widgetDomain
-              }
-            }
-          ]
+          resources: presentation.supportsUi
+            ? [
+                {
+                  uri: "ui://widget/publisher-v1",
+                  name: "Vibecodr.Space",
+                  mimeType: "text/html;profile=mcp-app",
+                  _meta: {
+                    ui: { uri: "ui://widget/publisher-v1", domain: widgetDomain },
+                    "openai/widgetDescription":
+                      "Vibecodr.Space is a social platform where code runs as content. This widget supports a guided publish flow: connect once, answer only the missing launch questions, and publish the generated app as a live, remixable vibe on the timeline.",
+                    "openai/widgetPrefersBorder": true,
+                    "openai/widgetDomain": widgetDomain
+                  }
+                }
+              ]
+            : []
         }
       }, { "x-trace-id": traceId, "cache-control": "no-store" });
     }
 
     if (method === "resources/read") {
+      const presentation = getClientPresentationForRequest(req, params);
       const uri = String(params["uri"] || "");
-      if (uri !== "ui://widget/publisher-v1") {
+      if (!presentation.supportsUi || uri !== "ui://widget/publisher-v1") {
         deps.telemetry.tool({
           traceId,
           toolName: "mcp.resources.read",

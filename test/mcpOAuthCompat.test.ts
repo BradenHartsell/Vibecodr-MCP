@@ -9,9 +9,11 @@ import {
   handleGatewayAuthorize,
   handleGatewayToken
 } from "../src/auth/mcpOAuthCompat.js";
+import { OAuthRefreshStore } from "../src/auth/oauthRefreshStore.js";
 import { buildOfficialMcpClientMetadata } from "../src/auth/officialMcpClient.js";
 import { buildToolWwwAuthenticate } from "../src/mcp/tools.js";
 import { SessionStore } from "../src/auth/sessionStore.js";
+import type { KvNamespaceLike } from "../src/storage/operationStoreKv.js";
 
 function base64UrlEncode(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
@@ -52,6 +54,25 @@ async function discoveryFetch(): Promise<Response> {
       }
     }
   );
+}
+
+class MockKv implements KvNamespaceLike {
+  private readonly map = new Map<string, string>();
+
+  async get(key: string, type?: "text" | "json"): Promise<string | null | unknown> {
+    const value = this.map.get(key) ?? null;
+    if (value == null) return null;
+    if (type === "json") return JSON.parse(value) as unknown;
+    return value;
+  }
+
+  async put(key: string, value: string): Promise<void> {
+    this.map.set(key, value);
+  }
+
+  async delete(key: string): Promise<void> {
+    this.map.delete(key);
+  }
 }
 
 test("loadConfigFromSource parses preregistered MCP redirect URIs", () => {
@@ -206,6 +227,98 @@ test("token exchange accepts the official URL-based client metadata document id"
   const res = await handleGatewayToken(req, config, codeStore, undefined, sessionStore, 10_000, discoveryFetch);
 
   assert.equal(res.status, 200);
+});
+
+test("refresh exchange replays the successful response when an official client retries the old token", async () => {
+  const config = createConfig();
+  const sessionStore = new SessionStore(config.sessionSigningKey);
+  const codeStore = new AuthorizationCodeStore();
+  const refreshStore = new OAuthRefreshStore(new MockKv(), config.sessionSigningKey);
+  const official = buildOfficialMcpClientMetadata(config);
+  const initialRefreshToken = await refreshStore.issue({
+    client_id: official.client_id,
+    provider_refresh_token: "clerk-refresh-token-1",
+    requested_scope: "openid profile email offline_access"
+  });
+  let upstreamRefreshCalls = 0;
+  let vibecodrExchangeCalls = 0;
+
+  const fakeFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === "https://clerk.vibecodr.space/.well-known/oauth-authorization-server") {
+      return discoveryFetch();
+    }
+    if (url === "https://clerk.vibecodr.space/oauth/token") {
+      const body = new URLSearchParams(String(init?.body || ""));
+      assert.equal(body.get("grant_type"), "refresh_token");
+      assert.equal(body.get("refresh_token"), "clerk-refresh-token-1");
+      upstreamRefreshCalls += 1;
+      return new Response(JSON.stringify({
+        access_token: "oauth_access_token_refreshed",
+        refresh_token: "clerk-refresh-token-2",
+        scope: "openid profile email offline_access"
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+    if (url === "https://api.vibecodr.space/auth/cli/exchange") {
+      vibecodrExchangeCalls += 1;
+      return new Response(JSON.stringify({
+        access_token: "vibecodr_access_token_refreshed",
+        user_id: "user_123",
+        user_handle: "brade",
+        expires_at: Math.floor(Date.now() / 1000) + 3600
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+    throw new Error("Unexpected fetch target: " + url);
+  };
+
+  const requestBody = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: initialRefreshToken,
+    client_id: official.client_id
+  }).toString();
+
+  const firstResponse = await handleGatewayToken(
+    new Request("https://openai.vibecodr.space/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: requestBody
+    }),
+    config,
+    codeStore,
+    refreshStore,
+    sessionStore,
+    10_000,
+    fakeFetch
+  );
+  assert.equal(firstResponse.status, 200);
+  const firstPayload = await firstResponse.json() as { access_token?: string; refresh_token?: string; scope?: string };
+  assert.equal(typeof firstPayload.access_token, "string");
+  assert.equal(typeof firstPayload.refresh_token, "string");
+
+  const replayResponse = await handleGatewayToken(
+    new Request("https://openai.vibecodr.space/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: requestBody
+    }),
+    config,
+    codeStore,
+    refreshStore,
+    sessionStore,
+    10_000,
+    fakeFetch
+  );
+  assert.equal(replayResponse.status, 200);
+  const replayPayload = await replayResponse.json() as { access_token?: string; refresh_token?: string; scope?: string };
+  assert.deepEqual(replayPayload, firstPayload);
+  assert.equal(upstreamRefreshCalls, 1);
+  assert.equal(vibecodrExchangeCalls, 1);
 });
 
 test("tool auth challenge includes resource metadata and required scopes", () => {

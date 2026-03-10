@@ -405,8 +405,9 @@ async function main() {
         client_id: registration.json.client_id
       }).toString()
     });
-    assert.equal(oldRefreshReuse.res.status, 400, "Expected rotated refresh token to be invalidated");
-    assert.equal(oldRefreshReuse.json?.error, "invalid_grant");
+    assert.equal(oldRefreshReuse.res.status, 200, "Expected immediate refresh-token retry to replay the successful response");
+    assert.equal(oldRefreshReuse.json?.access_token, refreshedToken.json?.access_token);
+    assert.equal(oldRefreshReuse.json?.refresh_token, refreshedToken.json?.refresh_token);
 
     const revoked = await fetchJson(baseUrl, jar, "/revoke", {
       method: "POST",

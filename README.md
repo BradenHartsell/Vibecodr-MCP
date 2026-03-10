@@ -120,6 +120,7 @@ Token lifetime model for MCP clients:
 - the gateway-issued bearer access token is short-lived, roughly 1 hour
 - MCP clients also receive a gateway refresh token when `offline_access` is granted
 - normal clients should refresh automatically and keep the login alive without sending the user back through sign-in
+- refresh rotation is retry-safe for short startup and reconnect races, so a duplicate refresh attempt should replay the successful response instead of invalidating the session
 - long-lived authorization only breaks if the user disconnects, the gateway revokes the session, or the upstream Clerk refresh token becomes invalid
 
 ## Endpoints

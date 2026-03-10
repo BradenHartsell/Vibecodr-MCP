@@ -65,6 +65,7 @@ Do not confuse the two auth entrypoints:
 
 ChatGPT app mode uses the shared tool surface and widget, but ChatGPT is typically configured with an explicit OAuth client during app setup.
 When `offline_access` is available, ChatGPT can refresh through the gateway without forcing the user back through the Clerk login flow.
+The gateway keeps refresh-token rotation retry-safe for a short window so native/public clients can survive duplicate startup refresh attempts without self-revoking the session.
 
 This mode is optimized for:
 - guided publishing

@@ -1,5 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { KvNamespaceLike } from "../storage/operationStoreKv.js";
+import {
+  RefreshReplayCoordinatorClient,
+  type AuthorizationCodeCoordinatorNamespaceLike
+} from "./authorizationCodeCoordinator.js";
 
 type PersistedRefreshGrant = {
   jti: string;
@@ -23,8 +27,28 @@ export type RefreshGrantInput = {
   provider_refresh_expires_at?: number;
 };
 
+export type RefreshReplayResponse = {
+  client_id: string;
+  access_token: string;
+  token_type: "Bearer";
+  expires_in: number;
+  scope: string;
+  refresh_token?: string;
+};
+
 const TOKEN_PREFIX = "vc_rt";
 const MAX_REFRESH_GRANT_TTL_MS = 180 * 24 * 60 * 60 * 1000;
+const REFRESH_PENDING_TTL_MS = 15_000;
+const REFRESH_REPLAY_TTL_MS = 120_000;
+
+type RefreshBeginState =
+  | { state: "leader" }
+  | { state: "wait" }
+  | { state: "replay"; response: RefreshReplayResponse };
+
+type InMemoryRefreshReplayRecord =
+  | { kind: "pending"; expiresAt: number }
+  | { kind: "replay"; expiresAt: number; response: RefreshReplayResponse };
 
 function base64UrlEncode(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
@@ -58,12 +82,16 @@ function computeExpiresAt(providerRefreshExpiresAt?: number): number {
 
 export class OAuthRefreshStore {
   private readonly key: Buffer;
+  private readonly replayCoordinator?: RefreshReplayCoordinatorClient;
+  private readonly inMemoryReplay = new Map<string, InMemoryRefreshReplayRecord>();
 
   constructor(
     private readonly kv: KvNamespaceLike,
-    signingKey: string
+    signingKey: string,
+    coordinationNamespace?: AuthorizationCodeCoordinatorNamespaceLike
   ) {
     this.key = createHash("sha256").update(signingKey + ":oauth-refresh").digest();
+    this.replayCoordinator = coordinationNamespace ? new RefreshReplayCoordinatorClient(coordinationNamespace) : undefined;
   }
 
   async issue(input: RefreshGrantInput): Promise<string> {
@@ -113,8 +141,60 @@ export class OAuthRefreshStore {
     if (!record) return null;
     if (!safeEquals(record.secretHash, stableHash(parsed.secret))) return null;
     await this.delete(parsed.jti);
+    await this.clearReplay(token);
     const { secretHash: _secretHash, ...grant } = record;
     return grant;
+  }
+
+  async beginRefresh(token: string): Promise<RefreshBeginState> {
+    if (this.replayCoordinator) {
+      return this.replayCoordinator.begin(token, REFRESH_PENDING_TTL_MS);
+    }
+    this.cleanupInMemoryReplay();
+    const existing = this.inMemoryReplay.get(token);
+    if (existing?.kind === "replay") {
+      return { state: "replay", response: existing.response };
+    }
+    if (existing?.kind === "pending") {
+      return { state: "wait" };
+    }
+    this.inMemoryReplay.set(token, {
+      kind: "pending",
+      expiresAt: Date.now() + REFRESH_PENDING_TTL_MS
+    });
+    return { state: "leader" };
+  }
+
+  async completeRefresh(token: string, response: RefreshReplayResponse): Promise<void> {
+    if (this.replayCoordinator) {
+      await this.replayCoordinator.complete(token, REFRESH_REPLAY_TTL_MS, response);
+      return;
+    }
+    this.cleanupInMemoryReplay();
+    this.inMemoryReplay.set(token, {
+      kind: "replay",
+      expiresAt: Date.now() + REFRESH_REPLAY_TTL_MS,
+      response
+    });
+  }
+
+  async failRefresh(token: string): Promise<void> {
+    if (this.replayCoordinator) {
+      await this.replayCoordinator.fail(token);
+      return;
+    }
+    const existing = this.inMemoryReplay.get(token);
+    if (existing?.kind === "pending") {
+      this.inMemoryReplay.delete(token);
+    }
+  }
+
+  async clearReplay(token: string): Promise<void> {
+    if (this.replayCoordinator) {
+      await this.replayCoordinator.clear(token);
+      return;
+    }
+    this.inMemoryReplay.delete(token);
   }
 
   private keyFor(jti: string): string {
@@ -183,6 +263,15 @@ export class OAuthRefreshStore {
   private async delete(jti: string): Promise<void> {
     if (typeof this.kv.delete === "function") {
       await this.kv.delete(this.keyFor(jti));
+    }
+  }
+
+  private cleanupInMemoryReplay(): void {
+    const now = Date.now();
+    for (const [token, record] of this.inMemoryReplay.entries()) {
+      if (record.expiresAt < now) {
+        this.inMemoryReplay.delete(token);
+      }
     }
   }
 }
