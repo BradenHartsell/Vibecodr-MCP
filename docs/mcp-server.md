@@ -119,6 +119,21 @@ Recovery tools:
 - `explain_operation_failure`
 - `cancel_import_operation`
 
+## Prompt workflows
+
+The server now exposes optional MCP prompts as user-invoked workflow starters. They are not required for tool correctness, but they help agents consistently ask for the missing launch details instead of improvising:
+
+- `publish_creation_end_to_end`
+- `polish_public_launch`
+- `recover_publish_failure`
+- `decide_when_to_use_pulses`
+
+These prompts are intended to steer first-run behavior such as:
+- asking whether the user wants SEO and social preview polish for a public launch
+- asking whether the user already has a cover image or wants generated art
+- checking account capabilities before promising premium polish or pulse-backed behavior
+- keeping recovery flows in plain language instead of dumping operation internals
+
 ## Troubleshooting
 
 ### ChatGPT works, generic MCP login fails

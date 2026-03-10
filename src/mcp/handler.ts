@@ -6,6 +6,7 @@ import {
   toolRequiresAuth,
   type ToolDeps
 } from "./tools.js";
+import { getPrompt, getPrompts } from "./prompts.js";
 import { jsonResponse } from "../lib/http.js";
 
 type JsonRpcId = string | number | null;
@@ -358,7 +359,8 @@ export async function handleMcpRequest(
       const protocolVersion = negotiatedProtocolVersion(requestedProtocolVersion);
       const presentation = storeClientPresentationForInitialize(req, params);
       const initializeCapabilities: Record<string, unknown> = {
-        tools: { listChanged: false }
+        tools: { listChanged: false },
+        prompts: { listChanged: false }
       };
       if (presentation.state.supportsUi) {
         initializeCapabilities["resources"] = { listChanged: false };
@@ -401,6 +403,58 @@ export async function handleMcpRequest(
       return jsonResponse(
         200,
         { jsonrpc: "2.0", id, result: { tools: getTools({ includeOutputSchema: false, supportsUi: presentation.supportsUi }) } },
+        { "x-trace-id": traceId, "cache-control": "no-store" }
+      );
+    }
+
+    if (method === "prompts/list") {
+      deps.telemetry.tool({
+        traceId,
+        toolName: "mcp.prompts.list",
+        outcome: "success",
+        latencyMs: Date.now() - requestStartedAt
+      });
+      return jsonResponse(
+        200,
+        { jsonrpc: "2.0", id, result: { prompts: getPrompts() } },
+        { "x-trace-id": traceId, "cache-control": "no-store" }
+      );
+    }
+
+    if (method === "prompts/get") {
+      const name = String(params["name"] || "");
+      const args =
+        params["arguments"] && typeof params["arguments"] === "object" && !Array.isArray(params["arguments"])
+          ? (params["arguments"] as Record<string, unknown>)
+          : {};
+      const prompt = getPrompt(name, args);
+      if (!prompt) {
+        deps.telemetry.tool({
+          traceId,
+          toolName: "mcp.prompts.get",
+          outcome: "failure",
+          latencyMs: Date.now() - requestStartedAt,
+          errorCode: "UNKNOWN_PROMPT"
+        });
+        return jsonResponse(200, {
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32602,
+            message: "Unknown prompt",
+            data: { traceId, errorId: crypto.randomUUID() }
+          }
+        }, { "x-trace-id": traceId, "cache-control": "no-store" });
+      }
+      deps.telemetry.tool({
+        traceId,
+        toolName: "mcp.prompts.get",
+        outcome: "success",
+        latencyMs: Date.now() - requestStartedAt
+      });
+      return jsonResponse(
+        200,
+        { jsonrpc: "2.0", id, result: prompt },
         { "x-trace-id": traceId, "cache-control": "no-store" }
       );
     }

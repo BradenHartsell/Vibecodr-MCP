@@ -99,6 +99,7 @@ Current public Codex docs explicitly document `codex mcp add`, `codex mcp list`,
 
 CLI tool discovery:
 - the canonical MCP way to discover commands is `initialize` followed by `tools/list`
+- this server also exposes optional workflow prompts through `prompts/list` and `prompts/get`
 - this repo includes a helper for that:
   - `npm run mcp:tools`
   - raw JSON: `node scripts/list-mcp-tools.mjs --raw`

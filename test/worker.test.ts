@@ -86,11 +86,12 @@ test("production worker initialize responds with the current MCP protocol versio
   const body = await response.json() as {
     result?: {
       protocolVersion?: string;
-      capabilities?: { tools?: { listChanged?: boolean } };
+      capabilities?: { tools?: { listChanged?: boolean }; prompts?: { listChanged?: boolean } };
     };
   };
   assert.equal(body.result?.protocolVersion, "2025-11-25");
   assert.equal(body.result?.capabilities?.tools?.listChanged, false);
+  assert.equal(body.result?.capabilities?.prompts?.listChanged, false);
   assert.equal(Object.prototype.hasOwnProperty.call(body.result?.capabilities || {}, "resources"), false);
 });
 
@@ -173,6 +174,30 @@ test("production worker hides widget resources and widget metadata from generic 
     result?: { resources?: unknown[] };
   };
   assert.deepEqual(resourcesBody.result?.resources, []);
+
+  const promptsResponse = await worker.fetch(
+    new Request("https://openai.vibecodr.space/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-11-25",
+        "mcp-session-id": sessionId!
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 4,
+        method: "prompts/list",
+        params: {}
+      })
+    }),
+    productionEnv()
+  );
+
+  assert.equal(promptsResponse.status, 200);
+  const promptsBody = await promptsResponse.json() as {
+    result?: { prompts?: Array<{ name?: string }> };
+  };
+  assert.equal(Boolean(promptsBody.result?.prompts?.some((prompt) => prompt.name === "publish_creation_end_to_end")), true);
 });
 
 test("production worker exposes widget resources to UI-capable hosts", async () => {
@@ -206,8 +231,9 @@ test("production worker exposes widget resources to UI-capable hosts", async () 
   );
 
   const initializeBody = await initialize.json() as {
-    result?: { capabilities?: { resources?: { listChanged?: boolean } } };
+    result?: { capabilities?: { prompts?: { listChanged?: boolean }; resources?: { listChanged?: boolean } } };
   };
+  assert.equal(initializeBody.result?.capabilities?.prompts?.listChanged, false);
   assert.equal(initializeBody.result?.capabilities?.resources?.listChanged, false);
 
   const sessionId = initialize.headers.get("mcp-session-id");
@@ -239,6 +265,35 @@ test("production worker exposes widget resources to UI-capable hosts", async () 
     };
   };
   assert.equal(resourcesBody.result?.resources?.[0]?.uri, "ui://widget/publisher-v1");
+
+  const promptResponse = await worker.fetch(
+    new Request("https://openai.vibecodr.space/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-11-25",
+        "mcp-session-id": sessionId!
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "prompts/get",
+        params: {
+          name: "publish_creation_end_to_end",
+          arguments: {
+            creation_summary: "An AI-built app bundle"
+          }
+        }
+      })
+    }),
+    productionEnv()
+  );
+
+  assert.equal(promptResponse.status, 200);
+  const promptBody = await promptResponse.json() as {
+    result?: { messages?: Array<{ content?: { text?: string } }> };
+  };
+  assert.match(String(promptBody.result?.messages?.[0]?.content?.text || ""), /SEO and social preview polish/i);
 });
 
 test("production worker returns a structured auth challenge for protected tool calls without a session", async () => {

@@ -119,6 +119,7 @@ async function main() {
   const initializeJson = await readJson(initializeResponse);
   assert.equal(initializeJson.result.protocolVersion, CURRENT_PROTOCOL_VERSION);
   assert.equal(initializeJson.result.capabilities.tools.listChanged, false);
+  assert.equal(initializeJson.result.capabilities.prompts.listChanged, false);
   assert.equal(Object.prototype.hasOwnProperty.call(initializeJson.result.capabilities, "resources"), false);
   const sessionId = initializeResponse.headers.get("mcp-session-id");
   assert.equal(typeof sessionId, "string");
@@ -159,6 +160,47 @@ async function main() {
     body: JSON.stringify({ jsonrpc: "2.0", id: 7, result: {} })
   }));
   assert.equal(responseOnlyPayload.status, 202);
+
+  const promptList = await handler(new Request("https://openai.vibecodr.space/mcp", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "mcp-protocol-version": CURRENT_PROTOCOL_VERSION,
+      "mcp-session-id": sessionId
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 12,
+      method: "prompts/list",
+      params: {}
+    })
+  }));
+  assert.equal(promptList.status, 200);
+  const promptListJson = await readJson(promptList);
+  assert.equal(Boolean(promptListJson.result.prompts.find((prompt) => prompt.name === "publish_creation_end_to_end")), true);
+
+  const promptGet = await handler(new Request("https://openai.vibecodr.space/mcp", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "mcp-protocol-version": CURRENT_PROTOCOL_VERSION,
+      "mcp-session-id": sessionId
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 13,
+      method: "prompts/get",
+      params: {
+        name: "publish_creation_end_to_end",
+        arguments: {
+          creation_summary: "AI-built files ready to publish"
+        }
+      }
+    })
+  }));
+  assert.equal(promptGet.status, 200);
+  const promptGetJson = await readJson(promptGet);
+  assert.match(promptGetJson.result.messages[0].content.text, /cover image/i);
 
   const unauthorizedProtectedTool = await handler(new Request("https://openai.vibecodr.space/mcp", {
     method: "POST",
@@ -219,19 +261,22 @@ async function main() {
     },
     body: JSON.stringify([
       { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
-      { jsonrpc: "2.0", id: 2, method: "resources/list", params: {} }
+      { jsonrpc: "2.0", id: 2, method: "resources/list", params: {} },
+      { jsonrpc: "2.0", id: 3, method: "prompts/list", params: {} }
     ])
   }));
   assert.equal(batchPayload.status, 200);
   const batchJson = await readJson(batchPayload);
   assert.equal(Array.isArray(batchJson), true);
-  assert.equal(batchJson.length, 2);
+  assert.equal(batchJson.length, 3);
   const batchToolsSize = Buffer.byteLength(JSON.stringify(batchJson.find((item) => item.id === 1)));
   assert.ok(batchToolsSize < 60_000, "tools/list payload should stay compact for connector refresh");
   const toolsResult = batchJson.find((item) => item.id === 1)?.result?.tools || [];
   const resourcesResult = batchJson.find((item) => item.id === 2)?.result?.resources || [];
+  const promptsResult = batchJson.find((item) => item.id === 3)?.result?.prompts || [];
   assert.ok(Array.isArray(toolsResult) && toolsResult.length > 0);
   assert.deepEqual(resourcesResult, []);
+  assert.equal(Boolean(promptsResult.find((prompt) => prompt.name === "polish_public_launch")), true);
   assert.equal("outputSchema" in toolsResult[0], false);
   const protectedTool = toolsResult.find((tool) => tool.name === "get_account_capabilities");
   assert.deepEqual(protectedTool?.securitySchemes, [{ type: "oauth2", scopes: ["openid", "profile", "email", "offline_access"] }]);
