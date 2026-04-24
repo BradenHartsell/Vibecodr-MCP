@@ -3,11 +3,10 @@ import type { ImportOperation, OperationStatus } from "../types.js";
 type Diagnostic = ImportOperation["diagnostics"][number];
 
 type FailureDetails = {
-  upstreamStatus?: number;
-  upstreamPath?: string;
-  upstreamCode?: string;
-  upstreamMessage?: string;
-  rawMessage?: string;
+  upstreamStatus?: number | undefined;
+  upstreamPath?: string | undefined;
+  upstreamCode?: string | undefined;
+  upstreamMessage?: string | undefined;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -23,6 +22,22 @@ function firstString(source: Record<string, unknown> | undefined, keys: string[]
   return undefined;
 }
 
+function safeDiagnosticString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length > 160) return undefined;
+  if (/[<>]/.test(trimmed)) return undefined;
+  if (/(authorization|bearer|cookie|password|secret|token|access_token|refresh_token)/i.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+function safeDiagnosticCode(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  return /^[A-Za-z0-9_.:-]{1,80}$/.test(trimmed) ? trimmed : undefined;
+}
+
 function includesAny(value: string | undefined, needles: string[]): boolean {
   if (!value) return false;
   const text = value.toLowerCase();
@@ -34,13 +49,13 @@ export function extractFailureDetails(error: unknown): Record<string, unknown> |
   if (!err) return undefined;
   const details: Record<string, unknown> = {};
   if (typeof err["status"] === "number" && Number.isFinite(err["status"])) details["upstreamStatus"] = err["status"];
-  if (typeof err["path"] === "string") details["upstreamPath"] = err["path"];
-  if (typeof err["message"] === "string") details["rawMessage"] = err["message"];
+  const upstreamPath = safeDiagnosticString(err["path"]);
+  if (upstreamPath) details["upstreamPath"] = upstreamPath;
 
   const data = asRecord(err["data"]);
   const nestedError = asRecord(data?.["error"]);
-  const upstreamCode = firstString(data, ["code", "error", "errorCode"]) || firstString(nestedError, ["code", "error", "errorCode"]);
-  const upstreamMessage = firstString(data, ["message", "detail", "description", "raw"]) || firstString(nestedError, ["message", "detail", "description"]);
+  const upstreamCode = safeDiagnosticCode(firstString(data, ["code", "error", "errorCode"]) || firstString(nestedError, ["code", "error", "errorCode"]));
+  const upstreamMessage = safeDiagnosticString(firstString(data, ["message", "detail", "description"]) || firstString(nestedError, ["message", "detail", "description"]));
   if (upstreamCode) details["upstreamCode"] = upstreamCode;
   if (upstreamMessage) details["upstreamMessage"] = upstreamMessage;
   return Object.keys(details).length ? details : undefined;
@@ -49,17 +64,26 @@ export function extractFailureDetails(error: unknown): Record<string, unknown> |
 function normalizeFailureDetails(details: Record<string, unknown> | undefined): FailureDetails {
   return {
     upstreamStatus: typeof details?.["upstreamStatus"] === "number" ? details["upstreamStatus"] as number : undefined,
-    upstreamPath: typeof details?.["upstreamPath"] === "string" ? details["upstreamPath"] as string : undefined,
-    upstreamCode: typeof details?.["upstreamCode"] === "string" ? details["upstreamCode"] as string : undefined,
-    upstreamMessage: typeof details?.["upstreamMessage"] === "string" ? details["upstreamMessage"] as string : undefined,
-    rawMessage: typeof details?.["rawMessage"] === "string" ? details["rawMessage"] as string : undefined
+    upstreamPath: safeDiagnosticString(details?.["upstreamPath"]),
+    upstreamCode: safeDiagnosticCode(typeof details?.["upstreamCode"] === "string" ? details["upstreamCode"] : undefined),
+    upstreamMessage: safeDiagnosticString(details?.["upstreamMessage"])
   };
+}
+
+function upstreamRootCauseSummary(info: FailureDetails, action: string): string | undefined {
+  if (typeof info.upstreamStatus === "number") {
+    return "Vibecodr upstream service returned " + info.upstreamStatus + " while " + action + ".";
+  }
+  if (info.upstreamCode) {
+    return "Vibecodr returned " + info.upstreamCode + " while " + action + ".";
+  }
+  return undefined;
 }
 
 type FailureTranslation = {
   userMessage: string;
   diagnosticMessage: string;
-  rootCauseSummary?: string;
+  rootCauseSummary?: string | undefined;
   nextActions: string[];
 };
 
@@ -72,7 +96,7 @@ export function translateFailure(
   const compilePath = includesAny(info.upstreamPath, ["/compile-draft"]);
   const publishPath = includesAny(info.upstreamPath, ["/publish"]);
   const importPath = includesAny(info.upstreamPath, ["/import/", "/capsules/empty", "/files/"]);
-  const combined = [info.upstreamCode, info.upstreamMessage, info.rawMessage].filter(Boolean).join(" | ");
+  const combined = [info.upstreamCode, info.upstreamMessage].filter(Boolean).join(" | ");
 
   if (status === "canceled") {
     return {
@@ -100,7 +124,7 @@ export function translateFailure(
     return {
       userMessage: "Vibecodr could not finish the compile check for this draft yet.",
       diagnosticMessage: "Vibecodr could not complete the compile check for this draft.",
-      rootCauseSummary: info.upstreamMessage || info.rawMessage,
+      rootCauseSummary: upstreamRootCauseSummary(info, "checking the draft compile"),
       nextActions: [
         "Ask ChatGPT to explain the blocker in plain language and retry the compile step.",
         "If the code was just edited, try the launch again after the package summary looks correct."
@@ -112,7 +136,7 @@ export function translateFailure(
     return {
       userMessage: "The draft did not make it through the final publish step.",
       diagnosticMessage: "Vibecodr could not finish publishing this draft.",
-      rootCauseSummary: info.upstreamMessage || info.rawMessage,
+      rootCauseSummary: upstreamRootCauseSummary(info, "publishing the draft"),
       nextActions: [
         "Ask ChatGPT to retry the publish step.",
         "If the draft needs more polish first, update the launch details and publish again."
@@ -152,7 +176,7 @@ export function translateFailure(
     return {
       userMessage: "Vibecodr could not finish turning this creation into a draft.",
       diagnosticMessage: "Vibecodr could not finish creating the draft for this launch.",
-      rootCauseSummary: info.upstreamMessage || info.rawMessage,
+      rootCauseSummary: upstreamRootCauseSummary(info, "creating the draft"),
       nextActions: [
         "Ask ChatGPT to retry the draft creation step.",
         "If the package is unusual, have ChatGPT verify the file list and start file before retrying."
@@ -163,7 +187,7 @@ export function translateFailure(
   return {
     userMessage: "This launch hit a blocker before it could finish.",
     diagnosticMessage: "This launch hit a blocker before Vibecodr could complete the workflow.",
-    rootCauseSummary: info.upstreamMessage || info.rawMessage,
+    rootCauseSummary: upstreamRootCauseSummary(info, "running the publish flow"),
     nextActions: [
       "Ask ChatGPT to explain the blocker and retry the right step.",
       "If the issue repeats, review the package summary and launch details before trying again."

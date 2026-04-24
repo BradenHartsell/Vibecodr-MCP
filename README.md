@@ -1,22 +1,26 @@
-# Vibecodr.Space OpenAI App
+# Vibecodr.Space MCP Gateway
 
-Production-grade ChatGPT App and ingestion service for importing vibecoded creations from Codex and ChatGPT into Vibecodr.
+Production-grade remote MCP server and ingestion service for importing vibecoded creations from Codex, ChatGPT, and other MCP clients into Vibecodr.
 
 ## Documentation
 
 - [docs/mcp-server.md](docs/mcp-server.md)
+- [docs/build-with-vibecodr-mcp.md](docs/build-with-vibecodr-mcp.md)
 - [docs/mcp-client-setup.md](docs/mcp-client-setup.md)
-- [docs/openai-app.md](docs/openai-app.md)
+- [docs/mcp-tool-surface-execution-plan.md](docs/mcp-tool-surface-execution-plan.md)
+- [docs/cloudflare-mcp-production-architecture-spec.md](docs/cloudflare-mcp-production-architecture-spec.md)
+- [docs/cloudflare-mcp-alignment.md](docs/cloudflare-mcp-alignment.md)
+- [docs/cloudflare-codemode-migration-plan.md](docs/cloudflare-codemode-migration-plan.md)
+- [docs/dynamic-worker-sandbox-configuration.md](docs/dynamic-worker-sandbox-configuration.md)
 - [docs/public-repo.md](docs/public-repo.md)
 
 ## Repo scope
 
-This repository is the public-facing gateway for the Vibecodr ChatGPT app and MCP server.
+This repository is the public-facing gateway for the Vibecodr MCP server.
 
 It contains:
 
 - the MCP server and tool surface
-- the ChatGPT widget
 - the OAuth gateway layer
 - the import/publish orchestration that talks to Vibecodr
 
@@ -103,18 +107,19 @@ CLI tool discovery:
 - this repo includes a helper for that:
   - `npm run mcp:tools`
   - raw JSON: `node scripts/list-mcp-tools.mjs --raw`
-- this lists the same MCP tool surface the app uses; the widget only changes presentation, not which MCP tools exist
+- this lists the same MCP tool surface exposed to all remote MCP clients
+- opt-in Code Mode discovery is available at `https://openai.vibecodr.space/mcp?codemode=search_and_execute`, where `tools/list` returns only `search` and `execute`
 
 This keeps Clerk as the identity provider while letting generic MCP clients complete OAuth without manual bearer token entry.
-When `offline_access` is included, the gateway can renew ChatGPT and MCP sessions with its own refresh tokens while keeping the upstream Clerk refresh token server-side.
+When `offline_access` is included, the gateway can renew MCP sessions with its own refresh tokens while keeping the upstream Clerk refresh token server-side.
 
 Important flow split:
-- `GET /auth/start` is the browser/widget auth flow and normally returns to `/widget`
+- `GET /auth/start` is the browser auth flow and normally returns to `/`
 - `GET /authorize` is the MCP OAuth flow used by remote MCP clients and redirects back to the client's registered `redirect_uri`
 - if you want to test what Codex, Cursor, VS Code, Windsurf, or ChatGPT MCP actually use, test `/authorize`, not `/auth/start`
 
 Public packaging boundary:
-- this repository remains the source-available hosted MCP server and ChatGPT app gateway
+- this repository remains the source-available hosted MCP server and OAuth gateway
 - any public CLI installer/runtime should live in a separate permissively licensed repo so hosted-service use stays clearly distinct from commercial reuse of this source code
 
 Token lifetime model for MCP clients:
@@ -129,7 +134,6 @@ Token lifetime model for MCP clients:
 - `GET /health`
 - `GET /health/observability`
 - `GET /.well-known/oauth-client/vibecodr-mcp.json`
-- `GET /widget`
 - `GET /auth/start`
 - `GET /auth/callback`
 - `GET /oauth_callback`
@@ -178,9 +182,18 @@ Runtime safety controls:
 - `RATE_LIMIT_WINDOW_SECONDS` (default `60`)
 - `RATE_LIMIT_REQUESTS_PER_WINDOW` (default `240`)
 - `RATE_LIMIT_MCP_REQUESTS_PER_WINDOW` (default `120`)
+- `CODEMODE_ENABLED` (default `true` in app config; deployment example keeps it `false` until Worker Loader is provisioned)
+- `CODEMODE_DEFAULT` (default `false`)
+- `CODEMODE_REQUIRE_DYNAMIC_WORKER` (default `true` in production)
+- `CODEMODE_ALLOW_NATIVE_FALLBACK` (deployment example: `false`)
+- `CODEMODE_MAX_EXECUTION_MS` (default `5000`)
+- `CODEMODE_MAX_OUTPUT_BYTES` (default `32768`)
+- `CODEMODE_MAX_LOG_BYTES` (default `8192`)
+- `CODEMODE_MAX_NESTED_CALLS` (default `5`)
 
 Gateway/API error responses include `traceId` in JSON and `x-trace-id` response headers for request correlation.
 Cloudflare deployments should configure `GLOBAL_RATE_LIMITER` and `MCP_RATE_LIMITER` bindings in Wrangler for cross-isolate enforcement.
+Code Mode deployments should configure a purpose-specific `CODEMODE_WORKER_LOADER` binding before enabling the dogfood route in production.
 
 ## Observability
 
@@ -231,16 +244,46 @@ You can keep your retrievable credentials there and copy values into runtime env
 
 ## MCP tools
 
+Default `tools/list` intentionally exposes the product-level surface only:
+
+- `get_vibecodr_platform_overview`
+- `get_guided_publish_requirements`
 - `get_upload_capabilities`
+- `prepare_publish_package`
+- `validate_creation_payload`
+- `get_launch_best_practices`
+- `get_pulse_setup_guidance`
+- `get_account_capabilities`
+- `get_publish_readiness`
+- `get_runtime_readiness`
+- `resume_latest_publish_flow`
+- `list_vibecodr_drafts`
+- `get_vibecodr_draft`
+- `list_my_live_vibes`
+- `get_live_vibe`
+- `get_vibe_engagement_summary`
+- `get_vibe_share_link`
+- `discover_vibes`
+- `get_public_post`
+- `get_public_profile`
+- `search_vibecodr`
+- `get_remix_lineage`
+- `get_thread_context`
+- `build_share_copy`
+- `get_launch_checklist`
+- `inspect_social_preview`
+- `suggest_post_publish_next_steps`
+- `get_engagement_followup_context`
+- `update_live_vibe_metadata`
+- `quick_publish_creation`
+
+Recovery handlers remain callable by exact name for compatibility, scripted diagnostics, and future Codemode catalog execution, but they are no longer advertised in the default tool list:
+
 - `list_import_operations`
 - `get_import_operation`
 - `watch_operation`
-- `get_publish_readiness`
 - `explain_operation_failure`
-- `list_vibecodr_drafts`
-- `get_vibecodr_draft`
 - `start_creation_import`
-- `quick_publish_creation`
 - `compile_draft_capsule`
 - `publish_draft_capsule`
 - `cancel_import_operation`
@@ -248,9 +291,16 @@ You can keep your retrievable credentials there and copy values into runtime env
 Recommended first impression flow for ChatGPT/Codex users:
 
 1. `quick_publish_creation` (one-shot import + compile + publish)
-2. `watch_operation` (if quick flow times out while waiting on async import jobs)
-3. `get_publish_readiness` (if user wants explicit gate checks before publish)
-4. `explain_operation_failure` (if any step fails and user needs recovery guidance)
+2. `get_publish_readiness` (if user wants explicit gate checks before publish)
+3. `get_runtime_readiness` (if the user needs the current launch state, blocker, and next action)
+4. `explain_operation_failure` by exact name only when a recovery flow needs deeper failure guidance
+
+Code Mode:
+
+- `POST /mcp?codemode=search_and_execute` advertises only `search` and `execute`.
+- `search` inspects the server-side capability catalog without loading every native schema into the model context.
+- `execute` routes a selected capability through gateway-owned handlers and the same auth challenge contract as native tools.
+- Run `npm run mcp:measure` to compare default native tools, all native tools, Code Mode descriptors, and the capability catalog.
 
 `quick_publish_creation` supports:
 
@@ -267,7 +317,7 @@ Structured tool errors include `errorId` for deterministic troubleshooting and s
 
 - `visibility`: `public | unlisted | private`
 - `coverKey`: existing uploaded key (for example `thumbnails/<user>/<id>.png`)
-- `thumbnailFile`: preferred OpenAI-hosted file reference from ChatGPT/widget uploads:
+- `thumbnailFile`: preferred hosted file reference from clients that can upload or attach launch art:
   - `fileId`
   - `downloadUrl`
   - `contentType`
@@ -280,7 +330,7 @@ Structured tool errors include `errorId` for deterministic troubleshooting and s
   - `fileName` (optional)
   - accepted mime: `image/png`, `image/jpeg`, `image/webp`, `image/avif`, `image/gif`
   - inline raw file should stay under `900 KB`
-  - fallback only when `thumbnailFile` is unavailable or the widget upload APIs are not present
+  - fallback only when `thumbnailFile` is unavailable
   - uploaded launch art now follows vibe visibility automatically: public/unlisted publishes use the public `app_cover` lane and private publishes use the private `standalone` lane
 - `seo`:
   - `title`, `description`, `imageKey`
@@ -296,16 +346,6 @@ See:
 - `deploy/cloudflare/wrangler.gateway.toml.example`
 
 For local deployment, copy the example file to `deploy/cloudflare/wrangler.gateway.toml` and keep that local override out of Git.
-
-## Submission packaging
-
-Prepare submission bundle:
-
-- `npm run package:submission`
-
-Output:
-- `dist/submission-bundle/`
-
 
 ## Security preflight
 

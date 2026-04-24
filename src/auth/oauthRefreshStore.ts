@@ -11,10 +11,10 @@ type PersistedRefreshGrant = {
   client_id: string;
   provider_refresh_token: string;
   requested_scope: string;
-  requested_resource?: string;
+  requested_resource?: string | undefined;
   created_at: number;
   expires_at: number;
-  provider_refresh_expires_at?: number;
+  provider_refresh_expires_at?: number | undefined;
 };
 
 export type RefreshGrantRecord = Omit<PersistedRefreshGrant, "secretHash">;
@@ -23,8 +23,8 @@ export type RefreshGrantInput = {
   client_id: string;
   provider_refresh_token: string;
   requested_scope: string;
-  requested_resource?: string;
-  provider_refresh_expires_at?: number;
+  requested_resource?: string | undefined;
+  provider_refresh_expires_at?: number | undefined;
 };
 
 export type RefreshReplayResponse = {
@@ -33,7 +33,7 @@ export type RefreshReplayResponse = {
   token_type: "Bearer";
   expires_in: number;
   scope: string;
-  refresh_token?: string;
+  refresh_token?: string | undefined;
 };
 
 const TOKEN_PREFIX = "vc_rt";
@@ -82,7 +82,7 @@ function computeExpiresAt(providerRefreshExpiresAt?: number): number {
 
 export class OAuthRefreshStore {
   private readonly key: Buffer;
-  private readonly replayCoordinator?: RefreshReplayCoordinatorClient;
+  private readonly replayCoordinator?: RefreshReplayCoordinatorClient | undefined;
   private readonly inMemoryReplay = new Map<string, InMemoryRefreshReplayRecord>();
 
   constructor(
@@ -226,7 +226,10 @@ export class OAuthRefreshStore {
     if (!value.startsWith("v1.")) return null;
     const parts = value.split(".");
     if (parts.length !== 4) return null;
-    const [, ivPart, encryptedPart, tagPart] = parts;
+    const ivPart = parts[1];
+    const encryptedPart = parts[2];
+    const tagPart = parts[3];
+    if (!ivPart || !encryptedPart || !tagPart) return null;
     try {
       const decipher = createDecipheriv("aes-256-gcm", this.key, base64UrlDecode(ivPart));
       decipher.setAuthTag(base64UrlDecode(tagPart));

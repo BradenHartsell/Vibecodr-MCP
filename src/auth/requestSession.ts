@@ -4,13 +4,14 @@ import type { Telemetry } from "../observability/telemetry.js";
 import type { SessionRecord } from "../types.js";
 import type { SessionRevocationStore } from "./sessionRevocationStore.js";
 import { exchangeProviderAccessForVibecodr } from "./vibecodrTokenExchange.js";
+import { readSessionCookie } from "./sessionCookie.js";
 
 type RequestSessionDeps = {
   sessionStore: SessionStore;
-  sessionRevocationStore?: SessionRevocationStore;
+  sessionRevocationStore?: SessionRevocationStore | undefined;
   telemetry: Telemetry;
   vibecodrApiBase: string;
-  vibecodrFetch?: typeof fetch;
+  vibecodrFetch?: typeof fetch | undefined;
 };
 
 export type RequestSessionResolution = {
@@ -49,13 +50,9 @@ export async function getSessionFromCookie(
   revocationStore?: SessionRevocationStore
 ): Promise<SessionRecord | null> {
   const cookie = req.headers.get("cookie") || "";
-  const token = cookie
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith("vc_session="));
-  if (!token) return null;
-  const value = decodeURIComponent(token.slice("vc_session=".length));
-  return ensureNotRevoked(store.getBySigned(value), revocationStore);
+  const token = readSessionCookie(cookie);
+  if (!token.value) return null;
+  return ensureNotRevoked(store.getBySigned(token.value), revocationStore);
 }
 
 export async function getGatewayBearerSession(
@@ -79,7 +76,10 @@ export async function exchangeBearerForSession(
   const cacheKey = stableTokenHash(bearerToken);
   const cached = bearerSessionCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now() + 5_000) {
-    return cached;
+    const activeCached = await ensureNotRevoked(cached, deps.sessionRevocationStore);
+    if (activeCached) return activeCached;
+    bearerSessionCache.delete(cacheKey);
+    return null;
   }
 
   let data: Awaited<ReturnType<typeof exchangeProviderAccessForVibecodr>>;
@@ -134,16 +134,18 @@ export async function exchangeBearerForSession(
     createdAt: Date.now(),
     expiresAt
   };
-  bearerSessionCache.set(cacheKey, session);
+  const activeSession = await ensureNotRevoked(session, deps.sessionRevocationStore);
+  if (!activeSession) return null;
+  bearerSessionCache.set(cacheKey, activeSession);
   deps.telemetry.auth({
     traceId,
     event: "mcp_bearer_exchange",
     outcome: "success",
     provider: "vibecodr",
-    userId: session.userId,
+    userId: activeSession.userId,
     endpoint: "/auth/session"
   });
-  return session;
+  return activeSession;
 }
 
 export async function resolveRequestSession(

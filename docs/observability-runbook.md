@@ -74,7 +74,7 @@
 
 ## Regression Gate
 
-- Run `npm run security:regression` before production deploys and submission refreshes.
+- Run `npm run security:regression` before production deploys and gateway release checks.
 - The regression gate validates:
   - path traversal and malformed package rejection
   - request body size enforcement

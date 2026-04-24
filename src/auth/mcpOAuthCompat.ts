@@ -16,19 +16,19 @@ type HttpFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 type OAuthEndpoints = {
   authorization_endpoint: string;
   token_endpoint: string;
-  revocation_endpoint?: string;
-  introspection_endpoint?: string;
-  userinfo_endpoint?: string;
-  jwks_uri?: string;
-  scopes_supported?: string[];
-  response_types_supported?: string[];
-  response_modes_supported?: string[];
-  grant_types_supported?: string[];
-  subject_types_supported?: string[];
-  id_token_signing_alg_values_supported?: string[];
-  token_endpoint_auth_methods_supported?: string[];
-  claims_supported?: string[];
-  code_challenge_methods_supported?: string[];
+  revocation_endpoint?: string | undefined;
+  introspection_endpoint?: string | undefined;
+  userinfo_endpoint?: string | undefined;
+  jwks_uri?: string | undefined;
+  scopes_supported?: string[] | undefined;
+  response_types_supported?: string[] | undefined;
+  response_modes_supported?: string[] | undefined;
+  grant_types_supported?: string[] | undefined;
+  subject_types_supported?: string[] | undefined;
+  id_token_signing_alg_values_supported?: string[] | undefined;
+  token_endpoint_auth_methods_supported?: string[] | undefined;
+  claims_supported?: string[] | undefined;
+  code_challenge_methods_supported?: string[] | undefined;
 };
 
 type MetadataCacheRecord = {
@@ -38,7 +38,7 @@ type MetadataCacheRecord = {
 
 type RegisteredClientPayload = {
   redirect_uris: string[];
-  client_name?: string;
+  client_name?: string | undefined;
   grant_types: string[];
   response_types: string[];
   token_endpoint_auth_method: "none";
@@ -52,7 +52,7 @@ export type AuthorizationRequestPayload = {
   client_state: string;
   code_challenge: string;
   requested_scope: string;
-  requested_resource?: string;
+  requested_resource?: string | undefined;
   clerk_code_verifier: string;
   iat: number;
   exp: number;
@@ -63,33 +63,33 @@ type AuthorizationCodeRecord = {
   redirect_uri: string;
   code_challenge: string;
   requested_scope: string;
-  requested_resource?: string;
+  requested_resource?: string | undefined;
   vibecodr_access_token: string;
   user_id: string;
-  user_handle?: string;
-  vibecodr_expires_at?: number;
-  provider_refresh_token?: string;
-  provider_refresh_expires_at?: number;
+  user_handle?: string | undefined;
+  vibecodr_expires_at?: number | undefined;
+  provider_refresh_token?: string | undefined;
+  provider_refresh_expires_at?: number | undefined;
   created_at: number;
   expires_at: number;
 };
 
 type UpstreamTokenPayload = {
-  access_token?: string;
-  refresh_token?: string;
-  token_type?: string;
-  expires_in?: number;
-  scope?: string;
-  error?: string;
-  refresh_token_expires_in?: number;
-  refresh_expires_in?: number;
+  access_token?: string | undefined;
+  refresh_token?: string | undefined;
+  token_type?: string | undefined;
+  expires_in?: number | undefined;
+  scope?: string | undefined;
+  error?: string | undefined;
+  refresh_token_expires_in?: number | undefined;
+  refresh_expires_in?: number | undefined;
 };
 
 export type GatewayAuthMetadata = OAuthEndpoints & {
   issuer: string;
   registration_endpoint: string;
-  registration_endpoint_auth_methods_supported?: string[];
-  client_id_metadata_document_supported?: boolean;
+  registration_endpoint_auth_methods_supported?: string[] | undefined;
+  client_id_metadata_document_supported?: boolean | undefined;
 };
 
 export type RegisteredClient = Omit<RegisteredClientPayload, "iat"> & {
@@ -101,7 +101,7 @@ type KnownClient = RegisteredClient | {
   client_id: string;
   client_id_issued_at: number;
   redirect_uris: string[];
-  client_name?: string;
+  client_name?: string | undefined;
   grant_types: string[];
   response_types: string[];
   token_endpoint_auth_method: "none";
@@ -297,26 +297,26 @@ export async function fetchUpstreamAuthMetadata(config: AppConfig, httpFetch: Ht
         continue;
       }
       const data = await res.json() as Record<string, unknown>;
-      if (typeof data.authorization_endpoint !== "string" || typeof data.token_endpoint !== "string") {
+      if (typeof data["authorization_endpoint"] !== "string" || typeof data["token_endpoint"] !== "string") {
         lastError = "missing authorization/token endpoint in " + candidate;
         continue;
       }
       const parsed: OAuthEndpoints = {
-        authorization_endpoint: data.authorization_endpoint,
-        token_endpoint: data.token_endpoint,
-        revocation_endpoint: typeof data.revocation_endpoint === "string" ? data.revocation_endpoint : undefined,
-        introspection_endpoint: typeof data.introspection_endpoint === "string" ? data.introspection_endpoint : undefined,
-        userinfo_endpoint: typeof data.userinfo_endpoint === "string" ? data.userinfo_endpoint : undefined,
-        jwks_uri: typeof data.jwks_uri === "string" ? data.jwks_uri : undefined,
-        scopes_supported: normalizeStringArray(data.scopes_supported, allowedScopes(config)),
-        response_types_supported: normalizeStringArray(data.response_types_supported, ["code"]),
-        response_modes_supported: normalizeStringArray(data.response_modes_supported, ["query"]),
-        grant_types_supported: normalizeStringArray(data.grant_types_supported, ["authorization_code", "refresh_token"]),
-        subject_types_supported: normalizeStringArray(data.subject_types_supported, ["public"]),
-        id_token_signing_alg_values_supported: normalizeStringArray(data.id_token_signing_alg_values_supported, ["RS256"]),
-        token_endpoint_auth_methods_supported: normalizeStringArray(data.token_endpoint_auth_methods_supported, ["none", "client_secret_post"]),
-        claims_supported: normalizeStringArray(data.claims_supported, []),
-        code_challenge_methods_supported: normalizeStringArray(data.code_challenge_methods_supported, ["S256"])
+        authorization_endpoint: data["authorization_endpoint"],
+        token_endpoint: data["token_endpoint"],
+        revocation_endpoint: typeof data["revocation_endpoint"] === "string" ? data["revocation_endpoint"] : undefined,
+        introspection_endpoint: typeof data["introspection_endpoint"] === "string" ? data["introspection_endpoint"] : undefined,
+        userinfo_endpoint: typeof data["userinfo_endpoint"] === "string" ? data["userinfo_endpoint"] : undefined,
+        jwks_uri: typeof data["jwks_uri"] === "string" ? data["jwks_uri"] : undefined,
+        scopes_supported: normalizeStringArray(data["scopes_supported"], allowedScopes(config)),
+        response_types_supported: normalizeStringArray(data["response_types_supported"], ["code"]),
+        response_modes_supported: normalizeStringArray(data["response_modes_supported"], ["query"]),
+        grant_types_supported: normalizeStringArray(data["grant_types_supported"], ["authorization_code", "refresh_token"]),
+        subject_types_supported: normalizeStringArray(data["subject_types_supported"], ["public"]),
+        id_token_signing_alg_values_supported: normalizeStringArray(data["id_token_signing_alg_values_supported"], ["RS256"]),
+        token_endpoint_auth_methods_supported: normalizeStringArray(data["token_endpoint_auth_methods_supported"], ["none", "client_secret_post"]),
+        claims_supported: normalizeStringArray(data["claims_supported"], []),
+        code_challenge_methods_supported: normalizeStringArray(data["code_challenge_methods_supported"], ["S256"])
       };
       metadataCache.set(cacheKey, { data: parsed, expiresAt: Date.now() + DISCOVERY_CACHE_MS });
       return parsed;
@@ -380,8 +380,8 @@ export function corsHeaders(extra?: Record<string, string>): Record<string, stri
 export function registerDynamicClient(config: AppConfig, body: unknown): RegisteredClient {
   const allowedGrantTypes = new Set(["authorization_code", "refresh_token"]);
   const raw = typeof body === "object" && body ? body as Record<string, unknown> : {};
-  const redirectUris = Array.isArray(raw.redirect_uris)
-    ? raw.redirect_uris.filter((item): item is string => typeof item === "string" && isValidRedirectUri(item))
+  const redirectUris = Array.isArray(raw["redirect_uris"])
+    ? raw["redirect_uris"].filter((item): item is string => typeof item === "string" && isValidRedirectUri(item))
     : [];
   if (!redirectUris.length) {
     throw Object.assign(new Error("redirect_uris must include at least one valid redirect URI"), {
@@ -389,7 +389,7 @@ export function registerDynamicClient(config: AppConfig, body: unknown): Registe
       error: "invalid_redirect_uri"
     });
   }
-  const requestedGrantTypes = normalizeStringArray(raw.grant_types, ["authorization_code"]);
+  const requestedGrantTypes = normalizeStringArray(raw["grant_types"], ["authorization_code"]);
   if (!requestedGrantTypes.includes("authorization_code")) {
     throw Object.assign(new Error("authorization_code grant type is required."), {
       status: 400,
@@ -402,14 +402,14 @@ export function registerDynamicClient(config: AppConfig, body: unknown): Registe
       error: "invalid_client_metadata"
     });
   }
-  const requestedResponseTypes = normalizeStringArray(raw.response_types, ["code"]);
+  const requestedResponseTypes = normalizeStringArray(raw["response_types"], ["code"]);
   if (requestedResponseTypes.some((value) => value !== "code")) {
     throw Object.assign(new Error("Only code response type is supported."), {
       status: 400,
       error: "invalid_client_metadata"
     });
   }
-  const tokenEndpointAuthMethod = typeof raw.token_endpoint_auth_method === "string" ? raw.token_endpoint_auth_method : "none";
+  const tokenEndpointAuthMethod = typeof raw["token_endpoint_auth_method"] === "string" ? raw["token_endpoint_auth_method"] : "none";
   if (tokenEndpointAuthMethod !== "none") {
     throw Object.assign(new Error("Only public PKCE clients with token_endpoint_auth_method=none are supported."), {
       status: 400,
@@ -419,7 +419,7 @@ export function registerDynamicClient(config: AppConfig, body: unknown): Registe
   const iat = Math.floor(Date.now() / 1000);
   const payload: RegisteredClientPayload = {
     redirect_uris: redirectUris,
-    client_name: typeof raw.client_name === "string" && raw.client_name.trim() ? raw.client_name.trim() : undefined,
+    client_name: typeof raw["client_name"] === "string" && raw["client_name"].trim() ? raw["client_name"].trim() : undefined,
     grant_types: requestedGrantTypes.filter((value, index) => requestedGrantTypes.indexOf(value) === index),
     response_types: ["code"],
     token_endpoint_auth_method: "none",
@@ -461,6 +461,7 @@ export function parseRegisteredClient(config: AppConfig, clientId: string): Regi
   const parts = suffix.split(".");
   if (parts.length !== 2) return null;
   const [encoded, signature] = parts;
+  if (!encoded || !signature) return null;
   if (!verifySignature(config.sessionSigningKey, "client:" + encoded, signature)) return null;
   try {
     const payload = JSON.parse(base64UrlDecode(encoded).toString("utf8")) as Partial<RegisteredClientPayload>;
@@ -519,8 +520,10 @@ function parseBasicClientCredentials(header: string | null): { clientId: string;
   if (!header) return null;
   const match = /^Basic\s+(.+)$/i.exec(header.trim());
   if (!match) return null;
+  const encoded = match[1];
+  if (!encoded) return null;
   try {
-    const decoded = Buffer.from(match[1], "base64").toString("utf8");
+    const decoded = Buffer.from(encoded, "base64").toString("utf8");
     const separator = decoded.indexOf(":");
     if (separator < 0) return null;
     return {
@@ -534,7 +537,7 @@ function parseBasicClientCredentials(header: string | null): { clientId: string;
 
 function resolveTokenClientCredentials(req: Request, form: URLSearchParams): {
   clientId: string;
-  clientSecret?: string;
+  clientSecret?: string | undefined;
 } {
   const basic = parseBasicClientCredentials(req.headers.get("authorization"));
   if (basic) {
@@ -545,7 +548,7 @@ function resolveTokenClientCredentials(req: Request, form: URLSearchParams): {
   }
   const clientId = form.get("client_id") || "";
   const clientSecret = form.get("client_secret") || undefined;
-  return { clientId, clientSecret };
+  return { clientId, ...(clientSecret ? { clientSecret } : {}) };
 }
 
 function validateStaticClientSecret(config: AppConfig, clientSecret: string | undefined): boolean {
@@ -567,7 +570,7 @@ export class GenericOauthRequestStateStore {
     clientState: string;
     codeChallenge: string;
     requestedScope: string;
-    requestedResource?: string;
+    requestedResource?: string | undefined;
     clerkCodeVerifier: string;
   }): string {
     this.cleanup();
@@ -630,7 +633,7 @@ export class GenericOauthRequestStateStore {
 
 export class AuthorizationCodeStore {
   private readonly mem = new Map<string, AuthorizationCodeRecord>();
-  private readonly coordinator?: AuthorizationCodeCoordinatorClient<AuthorizationCodeRecord>;
+  private readonly coordinator?: AuthorizationCodeCoordinatorClient<AuthorizationCodeRecord> | undefined;
   private readonly inflightConsumes = new Map<string, Promise<AuthorizationCodeRecord | null>>();
 
   constructor(
@@ -1161,11 +1164,11 @@ export async function handleGatewayToken(
     await refreshStore.completeRefresh(refreshToken, refreshResponse);
 
     return jsonResponse(200, {
-      access_token: issued.signedToken,
-      token_type: "Bearer",
-      expires_in: Math.max(Math.floor((issued.session.expiresAt - Date.now()) / 1000), 60),
-      ...(typeof tokenJson.scope === "string" ? { scope: tokenJson.scope } : { scope: grant.requested_scope }),
-      ...(rotatedRefreshToken ? { refresh_token: rotatedRefreshToken } : {})
+      access_token: refreshResponse.access_token,
+      token_type: refreshResponse.token_type,
+      expires_in: refreshResponse.expires_in,
+      scope: refreshResponse.scope,
+      ...(refreshResponse.refresh_token ? { refresh_token: refreshResponse.refresh_token } : {})
     }, corsHeaders({ "pragma": "no-cache" }));
   }
 

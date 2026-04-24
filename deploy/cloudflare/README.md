@@ -7,7 +7,7 @@ This repo now includes a real Cloudflare Worker runtime at `src/worker.ts` and a
 ## Architecture
 
 - Public Worker: `vibecodr-openai-gateway`
-  - Hosts OAuth endpoints, widget, MCP endpoint, auth session APIs
+  - Hosts OAuth endpoints, MCP endpoint, auth session APIs
   - Runs on `openai.vibecodr.space`
 - Internal Vibecodr API Worker: `vibecodr-api`
   - Invoked through Cloudflare Service Binding `VIBE_API`
@@ -64,13 +64,29 @@ Set in your local `deploy/cloudflare/wrangler.gateway.toml`:
 
 - `APP_BASE_URL=https://openai.vibecodr.space`
 - `OAUTH_CLIENT_ID=<clerk client id>`
-- `OAUTH_ISSUER_URL=https://clerk.vibecodr.space`
+- `OAUTH_ISSUER_URL=https://vibecodr.space/__clerk`
 - `OAUTH_SCOPES=openid profile email offline_access`
 - `MAX_REQUEST_BODY_BYTES=1500000`
 - `RATE_LIMIT_WINDOW_SECONDS=60`
 - `RATE_LIMIT_REQUESTS_PER_WINDOW=240`
 - `RATE_LIMIT_MCP_REQUESTS_PER_WINDOW=120`
+- `CODEMODE_ENABLED=false`
+- `CODEMODE_DEFAULT=false`
+- `CODEMODE_REQUIRE_DYNAMIC_WORKER=true`
+- `CODEMODE_ALLOW_NATIVE_FALLBACK=false`
+- `CODEMODE_MAX_EXECUTION_MS=5000`
+- `CODEMODE_MAX_OUTPUT_BYTES=32768`
+- `CODEMODE_MAX_LOG_BYTES=8192`
+- `CODEMODE_MAX_NESTED_CALLS=5`
+
+Keep the Worker config aligned with Cloudflare's current MCP/Workers guidance:
+
+- use Streamable HTTP at `/mcp`; do not reintroduce SSE for new clients
+- keep `nodejs_compat` enabled because the MCP gateway uses Node-compatible crypto and SDK-adjacent packages
+- enable Workers Logs and Traces before production deploy; tune `head_sampling_rate` lower if traffic volume requires it
+- keep OAuth state, refresh grants, and operation persistence on Cloudflare bindings rather than in process memory
 - `[[ratelimits]]` limits should match these values in production for deterministic behavior
+- keep `CODEMODE_ENABLED=false` until `[[worker_loaders]] binding = "CODEMODE_WORKER_LOADER"` is provisioned for this Worker
 
 In Clerk OAuth app:
 
@@ -94,7 +110,7 @@ After deploy, verify:
 
 - `GET /health` returns 200
 - `GET /auth/start` redirects to Clerk
-- OAuth callback sets `vc_session` cookie and redirects to `/widget`
+- OAuth callback sets `__Host-vc_session` in secure production, keeps `vc_session` for local non-HTTPS development, and redirects to `/`
 - `GET /api/auth/session` returns `authenticated: true` after login
 - `POST /mcp` responds to:
   - `initialize`

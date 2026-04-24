@@ -5,7 +5,7 @@ import { assertSafePath } from "../lib/pathPolicy.js";
 
 export class PackageResolutionError extends Error {
   readonly code: string;
-  readonly details?: Record<string, unknown>;
+  readonly details?: Record<string, unknown> | undefined;
 
   constructor(code: string, message: string, details?: Record<string, unknown>) {
     super(message);
@@ -29,7 +29,7 @@ const baseSchema = z.object({
   entry: z.string().min(1).optional(),
   files: z.array(fileSchema).default([]),
   importMode: z.enum(["direct_files", "zip_import", "github_import"]).default("direct_files"),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   idempotencyKey: z.string().optional(),
   github: z.object({
     url: z.string().url(),
@@ -193,5 +193,17 @@ export function parseNormalizedPackage(input: unknown): NormalizedCreationPackag
     files: files.map((f) => [f.path, f.contentEncoding, f.content.length])
   }));
 
-  return { ...parsed, title, entry, files, idempotencyKey: idem };
+  return {
+    sourceType: parsed.sourceType,
+    title,
+    runner: parsed.runner,
+    entry,
+    files,
+    importMode: parsed.importMode,
+    idempotencyKey: idem,
+    ...(parsed.sourceReference !== undefined ? { sourceReference: parsed.sourceReference } : {}),
+    ...(parsed.metadata !== undefined ? { metadata: parsed.metadata } : {}),
+    ...(parsed.github !== undefined ? { github: parsed.github } : {}),
+    ...(parsed.zip !== undefined ? { zip: parsed.zip } : {})
+  };
 }

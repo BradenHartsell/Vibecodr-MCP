@@ -87,10 +87,10 @@ This file is gitignored and can be used as your local source-of-truth for the Cl
 
 ## 5. Smoke tests
 
-1. Browser/widget flow: start app and hit `/auth/start`:
+1. Browser flow: start app and hit `/auth/start`:
 - expect 302 to Clerk authorization endpoint with PKCE parameters.
 2. Complete login:
-- expect redirect to `/widget`.
+- expect redirect to `/`.
 3. Hit `/api/auth/session`:
 - expect `authenticated: true`.
 4. Call MCP `tools/call` `list_vibecodr_drafts`:
@@ -101,7 +101,7 @@ This file is gitignored and can be used as your local source-of-truth for the Cl
 MCP OAuth flow is different:
 - start at `/authorize`, not `/auth/start`
 - expect redirect to Clerk
-- after approval, the gateway should redirect to the MCP client's registered `redirect_uri`, not to `/widget`
+- after approval, the gateway should redirect to the MCP client's registered `redirect_uri`, not to `/`
 
 ## 6. Security notes
 

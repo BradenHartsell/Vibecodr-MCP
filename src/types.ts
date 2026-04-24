@@ -144,27 +144,27 @@ export type EncodedFile = {
 
 export type NormalizedCreationPackage = {
   sourceType: SourceType;
-  sourceReference?: string;
+  sourceReference?: string | undefined;
   title: string;
   runner: RunnerType;
   entry: string;
   files: EncodedFile[];
   importMode: ImportMode;
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, unknown> | undefined;
   idempotencyKey: string;
   github?: {
     url: string;
-    branch?: string;
-    rootHint?: string;
-    allowModuleScripts?: boolean;
-    async?: boolean;
+    branch?: string | undefined;
+    rootHint?: string | undefined;
+    allowModuleScripts?: boolean | undefined;
+    async?: boolean | undefined;
   };
   zip?: {
     fileName: string;
     fileBase64: string;
-    rootHint?: string;
-    allowModuleScripts?: boolean;
-    async?: boolean;
+    rootHint?: string | undefined;
+    allowModuleScripts?: boolean | undefined;
+    async?: boolean | undefined;
   };
 };
 
@@ -187,29 +187,29 @@ export type ImportOperation = {
   operationId: string;
   userId: string;
   sourceType: SourceType;
-  sourceReference?: string;
+  sourceReference?: string | undefined;
   status: OperationStatus;
   currentStage: string;
-  capsuleId?: string;
-  importJobId?: string;
+  capsuleId?: string | undefined;
+  importJobId?: string | undefined;
   diagnostics: Array<{
     at: number;
     stage: string;
     code: string;
     message: string;
-    retryable?: boolean;
-    details?: Record<string, unknown>;
+    retryable?: boolean | undefined;
+    details?: Record<string, unknown> | undefined;
   }>;
   idempotencyKey: string;
   createdAt: number;
   updatedAt: number;
-  completedAt?: number;
+  completedAt?: number | undefined;
 };
 
 export type SessionRecord = {
   sessionId: string;
   userId: string;
-  userHandle?: string;
+  userHandle?: string | undefined;
   vibecodrToken: string;
   createdAt: number;
   expiresAt: number;
@@ -217,68 +217,68 @@ export type SessionRecord = {
 
 export type VibeClientUserContext = {
   userId: string;
-  userHandle?: string;
+  userHandle?: string | undefined;
   vibecodrToken: string;
 };
 
 export type PublishSeoFieldsInput = {
-  title?: string;
-  description?: string;
-  imageKey?: string;
+  title?: string | undefined;
+  description?: string | undefined;
+  imageKey?: string | undefined;
 };
 
 export type PublishSeoInput = PublishSeoFieldsInput & {
-  og?: PublishSeoFieldsInput | null;
-  twitter?: PublishSeoFieldsInput | null;
+  og?: PublishSeoFieldsInput | null | undefined;
+  twitter?: PublishSeoFieldsInput | null | undefined;
 };
 
 export type PublishThumbnailUpload = {
   contentType: string;
   fileBase64: string;
-  fileName?: string;
+  fileName?: string | undefined;
 };
 
 export type PublishThumbnailFile = {
   fileId: string;
   downloadUrl: string;
   contentType: string;
-  fileName?: string;
+  fileName?: string | undefined;
 };
 
 export type PublishDraftOptions = {
-  visibility?: PublishVisibility;
-  coverKey?: string;
-  thumbnailFile?: PublishThumbnailFile;
-  thumbnailUpload?: PublishThumbnailUpload;
-  seo?: PublishSeoInput;
+  visibility?: PublishVisibility | undefined;
+  coverKey?: string | undefined;
+  thumbnailFile?: PublishThumbnailFile | undefined;
+  thumbnailUpload?: PublishThumbnailUpload | undefined;
+  seo?: PublishSeoInput | undefined;
 };
 
 export type LiveVibeSummary = {
   postId: string;
   title: string;
-  description?: string | null;
+  description?: string | null | undefined;
   visibility: PublishVisibility;
-  authorHandle?: string;
-  authorName?: string | null;
-  coverKey?: string | null;
-  createdAt?: number | string;
-  updatedAt?: number | string;
+  authorHandle?: string | undefined;
+  authorName?: string | null | undefined;
+  coverKey?: string | null | undefined;
+  createdAt?: number | string | undefined;
+  updatedAt?: number | string | undefined;
   playerUrl: string;
   postUrl: string;
-  capsuleId?: string | null;
+  capsuleId?: string | null | undefined;
   stats: {
     runs: number;
     likes: number;
     comments: number;
     remixes: number;
-    views?: number;
-    embedViews?: number;
+    views?: number | undefined;
+    embedViews?: number | undefined;
   };
   packageSummary?: {
-    runner?: string;
-    entry?: string;
-    artifactId?: string | null;
-  };
+    runner?: string | undefined;
+    entry?: string | undefined;
+    artifactId?: string | null | undefined;
+  } | undefined;
 };
 
 export type VibeEngagementSummary = {
@@ -292,8 +292,8 @@ export type VibeEngagementSummary = {
     likes: number;
     comments: number;
     remixes: number;
-    views?: number;
-    embedViews?: number;
+    views?: number | undefined;
+    embedViews?: number | undefined;
   };
   summary: string;
 };
@@ -305,6 +305,50 @@ export type VibeShareSummary = {
   postUrl: string;
   playerUrl: string;
   shareCta: string;
+};
+
+export type SocialProfileSummary = CurrentUserProfileSummary & {
+  profileUrl: string;
+};
+
+export type SocialSearchResult = {
+  type: "post" | "profile" | "tag" | "capsule" | "thread" | "unknown";
+  id: string;
+  title: string;
+  url?: string | undefined;
+  description?: string | undefined;
+  authorHandle?: string | undefined;
+};
+
+export type SocialCommentSummary = {
+  id: string;
+  body: string;
+  authorHandle?: string | undefined;
+  authorName?: string | null | undefined;
+  createdAt?: number | string | undefined;
+  parentCommentId?: string | null | undefined;
+  score?: number | undefined;
+};
+
+export type RemixLineageSummary = {
+  capsuleId?: string | undefined;
+  postId?: string | undefined;
+  remixes: Array<{
+    id: string;
+    title?: string | undefined;
+    postId?: string | undefined;
+    capsuleId?: string | undefined;
+    authorHandle?: string | undefined;
+    createdAt?: number | string | undefined;
+  }>;
+};
+
+export type ThreadContextSummary = {
+  threadId?: string | undefined;
+  postId?: string | undefined;
+  title?: string | undefined;
+  url?: string | undefined;
+  comments: SocialCommentSummary[];
 };
 
 export type OperationWatchResult = {
@@ -322,13 +366,13 @@ export type PublishReadinessCheck = {
   id: string;
   level: PublishReadinessLevel;
   message: string;
-  details?: Record<string, unknown>;
+  details?: Record<string, unknown> | undefined;
 };
 
 export type PublishReadinessResult = {
   readyToPublish: boolean;
   operation: ImportOperation;
-  capsuleId?: string;
+  capsuleId?: string | undefined;
   checks: PublishReadinessCheck[];
   recommendedActions: string[];
 };
@@ -338,7 +382,7 @@ export type QuickPublishStep = {
   status: "completed" | "skipped" | "failed" | "timed_out";
   message: string;
   at: number;
-  details?: Record<string, unknown>;
+  details?: Record<string, unknown> | undefined;
 };
 
 export type QuickPublishResult = {
@@ -353,8 +397,8 @@ export type OperationFailureExplanation = {
   operationId: string;
   status: OperationStatus;
   failed: boolean;
-  rootCauseCode?: string;
-  rootCauseMessage?: string;
+  rootCauseCode?: string | undefined;
+  rootCauseMessage?: string | undefined;
   retryable: boolean;
   userMessage: string;
   nextActions: string[];
@@ -363,6 +407,6 @@ export type OperationFailureExplanation = {
     stage: string;
     code: string;
     message: string;
-    retryable?: boolean;
+    retryable?: boolean | undefined;
   }>;
 };

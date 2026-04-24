@@ -167,8 +167,8 @@ async function resolveBase64ThumbnailUpload(
 
 export async function resolveThumbnailInput(
   input: {
-    thumbnailFile?: PublishThumbnailFile;
-    thumbnailUpload?: PublishThumbnailUpload;
+    thumbnailFile?: PublishThumbnailFile | undefined;
+    thumbnailUpload?: PublishThumbnailUpload | undefined;
   },
   httpFetch: typeof fetch = fetch
 ): Promise<ResolvedThumbnailUpload | undefined> {

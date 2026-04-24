@@ -15,42 +15,49 @@ import { coverUsageForVisibility } from "../vibecodr/client.js";
 import type { ImportService } from "../services/importService.js";
 import type { OperationStorePort } from "../storage/operationStorePort.js";
 import type { SessionStore } from "../auth/sessionStore.js";
+import type { SessionRevocationStore } from "../auth/sessionRevocationStore.js";
 import type { VibecodrClient } from "../vibecodr/client.js";
 import type { Telemetry } from "../observability/telemetry.js";
+import type { CodeModeRuntimePolicy } from "./codeModeRuntime.js";
 import type {
   ImportOperation,
+  LiveVibeSummary,
+  NormalizedCreationPackage,
   OperationStatus,
   PublishThumbnailFile,
   PublishSeoInput,
   PublishThumbnailUpload,
   SourceType,
   PublishVisibility,
-  SessionRecord
+  SessionRecord,
+  VibeEngagementSummary
 } from "../types.js";
 
 export type ToolDeps = {
   importService: ImportService;
   operationStore: OperationStorePort;
   sessionStore: SessionStore;
+  sessionRevocationStore?: SessionRevocationStore | undefined;
   vibecodr: VibecodrClient;
   telemetry: Telemetry;
   appBaseUrl: string;
   vibecodrApiBase: string;
-  vibecodrFetch?: typeof fetch;
+  vibecodrFetch?: typeof fetch | undefined;
   featureFlags: {
     enableCodexImportPath: boolean;
     enableChatGptImportPath: boolean;
     enablePublishFromChatGpt: boolean;
   };
+  codeMode?: CodeModeRuntimePolicy | undefined;
 };
 
-type ToolResult = {
+export type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
   structuredContent?: unknown;
-  _meta?: Record<string, unknown>;
+  _meta?: Record<string, unknown> | undefined;
 };
 
-type ToolDescriptor = {
+export type ToolDescriptor = {
   name: string;
   title: string;
   description: string;
@@ -59,16 +66,15 @@ type ToolDescriptor = {
     readOnlyHint: boolean;
     destructiveHint: boolean;
     openWorldHint: boolean;
-    idempotentHint?: boolean;
+    idempotentHint?: boolean | undefined;
   };
   inputSchema: Record<string, unknown>;
-  outputSchema?: Record<string, unknown>;
-  _meta?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown> | undefined;
+  _meta?: Record<string, unknown> | undefined;
 };
 
-type ToolPresentationOptions = {
-  supportsUi?: boolean;
-};
+type ToolVisibility = "public" | "internal" | "recovery";
+type RegisteredToolDescriptor = ToolDescriptor & { visibility: ToolVisibility };
 
 const NOAUTH_SECURITY_SCHEMES = [{ type: "noauth" }];
 const OAUTH_TOOL_SCOPES = ["openid", "profile", "email", "offline_access"];
@@ -127,16 +133,6 @@ function safeSessionHandle(session: SessionRecord, fallback?: string): string {
   return candidate || "connected-account";
 }
 
-const WIDGET_ENABLED_TOOLS = new Set([
-  "start_creation_import",
-  "compile_draft_capsule",
-  "quick_publish_creation",
-  "publish_draft_capsule",
-  "get_publish_readiness",
-  "list_vibecodr_drafts",
-  "get_vibecodr_draft"
-]);
-
 const CREATION_FILE_INPUT_SCHEMA = {
   type: "object",
   required: ["path", "content"],
@@ -193,6 +189,12 @@ const CREATION_PAYLOAD_INPUT_SCHEMA = {
 const CREATION_PAYLOAD_REQUIREMENTS_TEXT =
   "Payload format: use payload.importMode to choose the lane. For direct_files, provide payload.files with { path, content, contentEncoding? }. For github_import, provide payload.github.url. For zip_import, provide payload.zip.fileName and payload.zip.fileBase64. Optional payload fields are title, runner, entry, sourceReference, metadata, and idempotencyKey. Do not invent wrapper keys outside this shape.";
 
+const CONFIRMED_WRITE_INPUT_SCHEMA = {
+  type: "boolean",
+  const: true,
+  description: "Must be true only after the user explicitly confirms this write action in the conversation."
+} as const;
+
 const THUMBNAIL_FILE_INPUT_SCHEMA = {
   type: "object",
   required: ["fileId", "downloadUrl", "contentType"],
@@ -220,35 +222,27 @@ function buildAuthServerUri(appBaseUrl: string): string {
   return appBaseUrl.replace(/\/$/, "") + "/authorize";
 }
 
-function toolMetaBase(
-  securitySchemes: Array<{ type: string; scopes?: string[] }>,
-  includeWidget = true
-): Record<string, unknown> {
-  return includeWidget
-    ? {
-        securitySchemes,
-        "openai/outputTemplate": "ui://widget/publisher-v1",
-        ui: { resourceUri: "ui://widget/publisher-v1", visibility: ["model", "app"] }
-      }
-    : { securitySchemes };
+function toolMetaBase(securitySchemes: Array<{ type: string; scopes?: string[] }>): Record<string, unknown> {
+  return { securitySchemes };
 }
 
-function stripWidgetMeta<T extends Record<string, unknown> | undefined>(meta: T): T {
-  if (!meta) return meta;
-  const sanitized = { ...meta };
-  delete sanitized["ui"];
-  delete sanitized["openai/outputTemplate"];
-  delete sanitized["openai/toolInvocation/invoking"];
-  delete sanitized["openai/toolInvocation/invoked"];
-  return sanitized as T;
+function confirmationRequiredResult(toolName: string, action: string): ToolResult {
+  return toolErrorResult(
+    `Explicit user confirmation is required before ${action}. Call ${toolName} again only after passing confirmed: true.`,
+    "CONFIRMATION_REQUIRED",
+    `This write is blocked until the user explicitly confirms it. Pass confirmed: true after that confirmation.`,
+    {
+      confirmationRequired: true,
+      requiredArgument: "confirmed",
+      toolName,
+      action,
+      userMessage: `Confirm before ${action}.`
+    }
+  );
 }
 
-function sanitizeToolDescriptorForPresentation(descriptor: ToolDescriptor, options?: ToolPresentationOptions): ToolDescriptor {
-  if (options?.supportsUi !== false) return descriptor;
-  return {
-    ...descriptor,
-    _meta: stripWidgetMeta(descriptor._meta)
-  };
+function requireConfirmedWrite(toolName: string, action: string, args: Record<string, unknown>): ToolResult | undefined {
+  return args["confirmed"] === true ? undefined : confirmationRequiredResult(toolName, action);
 }
 
 function stripOutputSchemaFromDescriptor(descriptor: ToolDescriptor): ToolDescriptor {
@@ -256,22 +250,9 @@ function stripOutputSchemaFromDescriptor(descriptor: ToolDescriptor): ToolDescri
   return rest;
 }
 
-function withWidgetTemplateMeta(result: ToolResult): ToolResult {
-  return {
-    ...result,
-    _meta: {
-      "openai/outputTemplate": "ui://widget/publisher-v1",
-      ...(result._meta || {})
-    }
-  };
-}
-
-function sanitizeToolResultForPresentation(result: ToolResult, options?: ToolPresentationOptions): ToolResult {
-  if (options?.supportsUi !== false) return result;
-  return {
-    ...result,
-    _meta: stripWidgetMeta(result._meta)
-  };
+function stripInternalToolFields(descriptor: RegisteredToolDescriptor): ToolDescriptor {
+  const { visibility: _visibility, ...tool } = descriptor;
+  return tool;
 }
 
 export function buildToolWwwAuthenticate(
@@ -304,14 +285,14 @@ function unauthorizedToolResult(appBaseUrl: string): ToolResult {
     content: [{
       type: "text",
       text:
-        "Connection required before publish actions can write to the user's Vibecodr account. Start the Vibecodr MCP OAuth flow in your MCP client, then continue the same guided publish flow. CLI auth, editor auth, and widget auth are separate."
+        "Connection required before publish actions can write to the user's Vibecodr account. Start the Vibecodr MCP OAuth flow in your MCP client, then continue the same guided publish flow. CLI auth and editor auth are separate."
     }],
     structuredContent: {
       authRequired: true,
       authUri: authServerUri,
       resourceMetadataUri,
       requiredScopes,
-      userMessage: "Connect Vibecodr MCP auth to continue the publish flow. CLI auth, editor auth, and widget auth are separate."
+      userMessage: "Connect Vibecodr MCP auth to continue the publish flow. CLI auth and editor auth are separate."
     },
     _meta: {
       "mcp/www_authenticate": wwwAuthenticate
@@ -323,16 +304,25 @@ type ErrorStructuredContent = {
   error: string;
   message?: string;
   errorId: string;
-};
+} & Record<string, unknown>;
 
-function buildErrorStructured(error: string, message?: string): ErrorStructuredContent {
-  return { error, ...(message ? { message } : {}), errorId: randomUUID() };
+function buildErrorStructured(
+  error: string,
+  message?: string,
+  extra?: Record<string, unknown>
+): ErrorStructuredContent {
+  return { error, ...(message ? { message } : {}), ...(extra || {}), errorId: randomUUID() };
 }
 
-function toolErrorResult(text: string, error: string, message?: string): ToolResult {
+function toolErrorResult(
+  text: string,
+  error: string,
+  message?: string,
+  extra?: Record<string, unknown>
+): ToolResult {
   return {
     content: [{ type: "text", text }],
-    structuredContent: buildErrorStructured(error, message)
+    structuredContent: buildErrorStructured(error, message, extra)
   };
 }
 
@@ -344,6 +334,285 @@ function packageResolutionToolResult(error: PackageResolutionError): ToolResult 
   return toolErrorResult(error.message + suffix, error.code, error.message);
 }
 
+function normalizeCreationPayloadForTool(args: Record<string, unknown>, deps: ToolDeps): {
+  sourceType: SourceType;
+  normalized?: NormalizedCreationPackage;
+  disabledReason?: string;
+} {
+  const sourceType = parseSourceTypeArg(args["sourceType"]);
+  if (sourceType === "codex_v1" && !deps.featureFlags.enableCodexImportPath) {
+    return { sourceType, disabledReason: "Codex import path is disabled." };
+  }
+  if (sourceType === "chatgpt_v1" && !deps.featureFlags.enableChatGptImportPath) {
+    return { sourceType, disabledReason: "ChatGPT import path is disabled." };
+  }
+  const payload = args["payload"] && typeof args["payload"] === "object" && !Array.isArray(args["payload"])
+    ? args["payload"] as Record<string, unknown>
+    : {};
+  return {
+    sourceType,
+    normalized: sourceType === "codex_v1" ? adaptCodexPayload(payload) : adaptChatGptPayload(payload)
+  };
+}
+
+function inferPackageShape(pkg: NormalizedCreationPackage): string {
+  if (pkg.importMode !== "direct_files") return "external_import";
+  const paths = pkg.files.map((file) => file.path.toLowerCase());
+  const hasPulseSignal = paths.some((path) => path.includes(".pulse") || path.includes("pulse/") || path.includes("worker"));
+  const hasServerSignal = paths.some((path) => path.startsWith("api/") || path.startsWith("server/") || path.includes("/server/"));
+  if (hasPulseSignal || hasServerSignal) return "vibe_with_backend_signals";
+  return "frontend_vibe";
+}
+
+function buildNormalizedPackageSummary(pkg: NormalizedCreationPackage): Record<string, unknown> {
+  return {
+    sourceType: pkg.sourceType,
+    importMode: pkg.importMode,
+    title: pkg.title,
+    runner: pkg.runner,
+    entry: pkg.entry,
+    fileCount: pkg.files.length,
+    packageShape: inferPackageShape(pkg),
+    idempotencyKey: pkg.idempotencyKey,
+    ...(pkg.sourceReference ? { sourceReference: pkg.sourceReference } : {})
+  };
+}
+
+function buildSuggestedPublishArguments(pkg: NormalizedCreationPackage): Record<string, unknown> {
+  return {
+    sourceType: pkg.sourceType,
+    payload: {
+      importMode: pkg.importMode,
+      title: pkg.title,
+      runner: pkg.runner,
+      entry: pkg.entry,
+      idempotencyKey: pkg.idempotencyKey,
+      ...(pkg.sourceReference ? { sourceReference: pkg.sourceReference } : {}),
+      ...(pkg.metadata ? { metadata: pkg.metadata } : {}),
+      reuseOriginalPayloadFiles: pkg.importMode === "direct_files",
+      reuseOriginalPayloadArchive: pkg.importMode === "zip_import",
+      reuseOriginalPayloadRepository: pkg.importMode === "github_import"
+    },
+    visibility: "public",
+    confirmed: false
+  };
+}
+
+function preparePublishPackageResult(args: Record<string, unknown>, deps: ToolDeps): ToolResult {
+  try {
+    const prepared = normalizeCreationPayloadForTool(args, deps);
+    if (prepared.disabledReason || !prepared.normalized) {
+      return {
+        content: [{ type: "text", text: prepared.disabledReason || "Package could not be prepared." }],
+        structuredContent: {
+          canPublish: false,
+          requiredFixes: [prepared.disabledReason || "Package could not be prepared."],
+          warnings: [],
+          normalizedSummary: { sourceType: prepared.sourceType },
+          suggestedArguments: { sourceType: prepared.sourceType, confirmed: false },
+          confirmationPrompt: "Do not publish until the package can be prepared without blocking fixes."
+        }
+      };
+    }
+
+    const pkg = prepared.normalized;
+    const warnings = [
+      ...(inferPackageShape(pkg) === "vibe_with_backend_signals"
+        ? ["This package has backend-looking files. Use pulse guidance before promising backend behavior."]
+        : []),
+      ...(pkg.importMode !== "direct_files"
+        ? ["External imports are prepared as package references; Vibecodr will finish archive/repository analysis during import."]
+        : [])
+    ];
+    return {
+      content: [{ type: "text", text: `${pkg.title} is prepared for a no-write publish review.` }],
+      structuredContent: {
+        canPublish: true,
+        requiredFixes: [],
+        warnings,
+        normalizedSummary: buildNormalizedPackageSummary(pkg),
+        suggestedArguments: buildSuggestedPublishArguments(pkg),
+        confirmationPrompt:
+          `Should I publish "${pkg.title}" as a public Vibecodr vibe now? I will only pass confirmed: true after you confirm.`
+      }
+    };
+  } catch (error) {
+    const sourceType = args["sourceType"] === "codex_v1" || args["sourceType"] === "chatgpt_v1" ? args["sourceType"] : "chatgpt_v1";
+    const requiredFix = error instanceof PackageResolutionError
+      ? error.message
+      : error instanceof Error
+        ? error.message
+        : String(error);
+    const candidates = error instanceof PackageResolutionError && Array.isArray(error.details?.["candidateEntries"])
+      ? (error.details?.["candidateEntries"] as unknown[]).filter((value): value is string => typeof value === "string")
+      : [];
+    return {
+      content: [{ type: "text", text: "Package needs a fix before it can be published: " + requiredFix }],
+      structuredContent: {
+        canPublish: false,
+        requiredFixes: [requiredFix],
+        warnings: candidates.length ? ["Possible entry files: " + candidates.join(", ")] : [],
+        normalizedSummary: { sourceType },
+        suggestedArguments: { sourceType, confirmed: false },
+        confirmationPrompt: "Fix the package first; do not publish this payload yet."
+      }
+    };
+  }
+}
+
+function optionalStringArg(raw: unknown): string | undefined {
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+function requiredStringArg(args: Record<string, unknown>, key: string): string {
+  const value = optionalStringArg(args[key]);
+  if (!value) throw new Error(key + " is required.");
+  return value;
+}
+
+function parseBoundedIntegerArg(raw: unknown, defaultValue: number, maxValue: number): number {
+  if (raw === undefined) return defaultValue;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) throw new Error("Expected a finite number.");
+  return Math.min(Math.max(Math.floor(raw), 1), maxValue);
+}
+
+function parseOffsetArg(raw: unknown): number {
+  if (raw === undefined) return 0;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) throw new Error("offset must be a finite number.");
+  return Math.min(Math.max(Math.floor(raw), 0), 500);
+}
+
+function buildShareCopyForVibe(vibe: LiveVibeSummary): {
+  postId: string;
+  title: string;
+  shortCopy: string;
+  longCopy: string;
+  links: string[];
+  hashtags: string[];
+} {
+  const links = [...new Set([vibe.postUrl, vibe.playerUrl])];
+  return {
+    postId: vibe.postId,
+    title: vibe.title,
+    shortCopy: `${vibe.title} is live on Vibecodr: ${vibe.playerUrl}`,
+    longCopy:
+      `I just published ${vibe.title} on Vibecodr. You can run it directly, remix it, comment on it, and share it from ${vibe.postUrl}.`,
+    links,
+    hashtags: ["Vibecodr", "CreativeCoding", "BuiltWithAI"]
+  };
+}
+
+function buildLaunchChecklistForVibe(vibe: LiveVibeSummary): Array<{
+  id: string;
+  status: "complete" | "warning" | "missing";
+  message: string;
+  action: string;
+}> {
+  return [
+    {
+      id: "live_post",
+      status: "complete",
+      message: "The live post URL is available.",
+      action: "Use the post URL when sharing the full Vibecodr context."
+    },
+    {
+      id: "live_player",
+      status: "complete",
+      message: "The live player URL is available.",
+      action: "Use the player URL when people should open the vibe directly."
+    },
+    {
+      id: "visibility",
+      status: vibe.visibility === "public" ? "complete" : "warning",
+      message: vibe.visibility === "public"
+        ? "The vibe is public and discoverable."
+        : "The vibe is not public, so discovery and casual sharing are limited.",
+      action: vibe.visibility === "public"
+        ? "Keep the launch language share-forward."
+        : "Only recommend wider launch copy if the user wants this vibe made public."
+    },
+    {
+      id: "cover",
+      status: vibe.coverKey ? "complete" : "missing",
+      message: vibe.coverKey ? "A cover image is attached." : "No cover image is attached yet.",
+      action: vibe.coverKey
+        ? "Use inspect_social_preview for the final presentation pass."
+        : "Offer cover generation or ask for an image before broader sharing."
+    },
+    {
+      id: "description",
+      status: vibe.description?.trim() ? "complete" : "warning",
+      message: vibe.description?.trim() ? "The vibe has descriptive launch copy." : "The vibe has little or no description.",
+      action: "Use build_share_copy for a concise public launch blurb."
+    },
+    {
+      id: "engagement_followup",
+      status: "warning",
+      message: "Engagement should be checked after the first share window.",
+      action: "Use get_engagement_followup_context after the vibe has had time to collect runs, likes, comments, or remixes."
+    }
+  ];
+}
+
+function buildSocialPreviewForVibe(vibe: LiveVibeSummary): {
+  postId: string;
+  ready: boolean;
+  title: string;
+  description: string;
+  imageStatus: string;
+  links: string[];
+  warnings: string[];
+} {
+  const warnings = [
+    ...(vibe.description?.trim() ? [] : ["Add a concise description before broad sharing."]),
+    ...(vibe.coverKey ? [] : ["Add a cover image so feed cards and shared previews feel intentional."]),
+    ...(vibe.visibility === "public" ? [] : ["This vibe is not public, so some recipients may not be able to discover it naturally."])
+  ];
+  return {
+    postId: vibe.postId,
+    ready: warnings.length === 0,
+    title: vibe.title,
+    description: vibe.description?.trim() || "No description is available yet.",
+    imageStatus: vibe.coverKey ? "cover_present" : "missing_cover",
+    links: [...new Set([vibe.postUrl, vibe.playerUrl])],
+    warnings
+  };
+}
+
+function buildPostPublishNextSteps(vibe: LiveVibeSummary): {
+  priority: string;
+  nextSteps: string[];
+} {
+  const nextSteps = [
+    "Share the player link with a short sentence that says people can run the vibe immediately.",
+    "Open the public post after sharing so comments or early questions do not sit unanswered.",
+    ...(vibe.coverKey ? [] : ["Add a cover image before the next discovery push."]),
+    ...(vibe.description?.trim() ? [] : ["Add a one-sentence description so the feed card explains the idea without context."]),
+    ...(vibe.stats.comments > 0 ? ["Reply to the newest comments while the launch is still fresh."] : []),
+    ...(vibe.stats.remixes > 0 ? ["Inspect remix lineage to understand what people are building from it."] : [])
+  ];
+  const priority = vibe.coverKey && vibe.description?.trim() ? "share_and_engage" : "polish_before_broad_share";
+  return { priority, nextSteps };
+}
+
+function buildEngagementFollowups(engagement: VibeEngagementSummary): string[] {
+  const followups = [
+    engagement.stats.comments > 0
+      ? "Respond to recent comments and turn useful feedback into a visible update."
+      : "Ask for one specific reaction when sharing, such as what should be remixed or added next.",
+    engagement.stats.remixes > 0
+      ? "Read the remix lineage and acknowledge interesting variants."
+      : "Invite remixing explicitly if the vibe is meant to be played with or extended.",
+    engagement.stats.runs > 0
+      ? "Use the run count as lightweight social proof in follow-up copy."
+      : "Share the player link directly so the first interaction is one click.",
+    engagement.stats.likes > engagement.stats.comments
+      ? "Convert passive likes into comments by asking a concrete follow-up question."
+      : "Keep watching comments for product or polish signals."
+  ];
+  return [...new Set(followups)];
+}
+
 export async function getSessionForToolRequest(
   req: Request,
   deps: ToolDeps,
@@ -351,6 +620,7 @@ export async function getSessionForToolRequest(
 ): Promise<SessionRecord | null> {
   const resolved = await resolveRequestSession(req, {
     sessionStore: deps.sessionStore,
+    sessionRevocationStore: deps.sessionRevocationStore,
     telemetry: deps.telemetry,
     vibecodrApiBase: deps.vibecodrApiBase,
     vibecodrFetch: deps.vibecodrFetch
@@ -359,7 +629,7 @@ export async function getSessionForToolRequest(
 }
 
 export function toolRequiresAuth(name: string): boolean {
-  const descriptor = getTools().find((tool) => tool.name === name);
+  const descriptor = getTools({ includeHidden: true }).find((tool) => tool.name === name);
   return Boolean(descriptor?.securitySchemes.some((scheme) => scheme.type === "oauth2"));
 }
 
@@ -441,12 +711,14 @@ function parseThumbnailUploadArg(raw: unknown): PublishThumbnailUpload | undefin
 }
 
 function parseThumbnailArgs(args: Record<string, unknown>): {
-  thumbnailFile?: PublishThumbnailFile;
-  thumbnailUpload?: PublishThumbnailUpload;
+  thumbnailFile?: PublishThumbnailFile | undefined;
+  thumbnailUpload?: PublishThumbnailUpload | undefined;
 } {
+  const thumbnailFile = parseThumbnailFileArg(args["thumbnailFile"]);
+  const thumbnailUpload = parseThumbnailUploadArg(args["thumbnailUpload"]);
   return {
-    thumbnailFile: parseThumbnailFileArg(args["thumbnailFile"]),
-    thumbnailUpload: parseThumbnailUploadArg(args["thumbnailUpload"])
+    ...(thumbnailFile ? { thumbnailFile } : {}),
+    ...(thumbnailUpload ? { thumbnailUpload } : {})
   };
 }
 
@@ -526,19 +798,19 @@ type RecoveryOperationSummary = {
 
 type PublicDraftSummary = {
   draftId: string;
-  title?: string;
-  slug?: string;
-  status?: string;
-  visibility?: string;
-  updatedAt?: number | string;
-  createdAt?: number | string;
-  publishedUrl?: string;
+  title?: string | undefined;
+  slug?: string | undefined;
+  status?: string | undefined;
+  visibility?: string | undefined;
+  updatedAt?: number | string | undefined;
+  createdAt?: number | string | undefined;
+  publishedUrl?: string | undefined;
   packageSummary?: {
-    runner?: string;
-    entry?: string;
-    fileCount?: number;
-    importMode?: string;
-  };
+    runner?: string | undefined;
+    entry?: string | undefined;
+    fileCount?: number | undefined;
+    importMode?: string | undefined;
+  } | undefined;
 };
 
 function readStringField(source: Record<string, unknown>, keys: string[]): string | undefined {
@@ -733,6 +1005,178 @@ function summarizeQuickPublishSteps(
   }));
 }
 
+function knownIdsForOperation(operation: ImportOperation): Record<string, string> {
+  const postId = extractPublishedPostId(operation);
+  return {
+    operationId: operation.operationId,
+    ...(operation.capsuleId ? { capsuleId: operation.capsuleId } : {}),
+    ...(postId ? { postId } : {})
+  };
+}
+
+function recommendedResumeCall(operation: ImportOperation): {
+  name: string;
+  arguments: Record<string, unknown>;
+  requiresConfirmation: boolean;
+  nextSafeAction: string;
+  phase: string;
+} {
+  if (operation.status === "published" || operation.status === "published_with_warnings") {
+    const postId = extractPublishedPostId(operation);
+    return {
+      name: postId ? "get_vibe_share_link" : "get_runtime_readiness",
+      arguments: postId ? { postId } : { operationId: operation.operationId },
+      requiresConfirmation: false,
+      nextSafeAction: postId
+        ? "Open the live vibe, build share copy, or inspect post-publish engagement."
+        : "Inspect the published operation and recover the live post link.",
+      phase: "published"
+    };
+  }
+
+  if (operation.status === "failed" || operation.status === "compile_failed") {
+    return {
+      name: "explain_operation_failure",
+      arguments: { operationId: operation.operationId },
+      requiresConfirmation: false,
+      nextSafeAction: "Explain the blocker in plain language and take one recovery step.",
+      phase: "blocked"
+    };
+  }
+
+  if (operation.status === "canceled") {
+    return {
+      name: "get_guided_publish_requirements",
+      arguments: {},
+      requiresConfirmation: false,
+      nextSafeAction: "Review the guided publish requirements and gather the creation payload before preparing a new package.",
+      phase: "canceled"
+    };
+  }
+
+  if (operation.status === "draft_ready" && operation.capsuleId) {
+    return {
+      name: "publish_draft_capsule",
+      arguments: {
+        operationId: operation.operationId,
+        capsuleId: operation.capsuleId,
+        visibility: "public",
+        confirmed: false
+      },
+      requiresConfirmation: true,
+      nextSafeAction: "Ask the user for explicit publish confirmation before making the draft live.",
+      phase: operation.currentStage === "compiled" ? "draft_compiled" : "draft_ready"
+    };
+  }
+
+  return {
+    name: "watch_operation",
+    arguments: {
+      operationId: operation.operationId,
+      targetStatuses: ["draft_ready", "failed", "canceled"]
+    },
+    requiresConfirmation: false,
+    nextSafeAction: "Wait for the draft to finish preparing, then resume from the returned operation state.",
+    phase: "in_progress"
+  };
+}
+
+async function buildResumeLatestPublishFlowResult(
+  session: SessionRecord,
+  deps: ToolDeps,
+  traceId: string | undefined,
+  limit: number
+): Promise<ToolResult> {
+  const operations = await deps.operationStore.listByUser(session.userId, limit);
+  const refreshed = await deps.importService.refreshPendingOperations(session, operations, {
+    traceId,
+    endpoint: "/mcp"
+  });
+  const latest = [...refreshed].sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)[0];
+  const ctx = { userId: session.userId, userHandle: session.userHandle, vibecodrToken: session.vibecodrToken };
+
+  if (!latest) {
+    let latestVibe: LiveVibeSummary | undefined;
+    try {
+      latestVibe = (await deps.vibecodr.listMyLiveVibes(ctx, { limit: 1, offset: 0 }, {
+        telemetry: deps.telemetry,
+        traceId,
+        userId: session.userId
+      }))[0];
+    } catch {
+      latestVibe = undefined;
+    }
+
+    if (latestVibe) {
+      return {
+        content: [{ type: "text", text: `${latestVibe.title} is the latest live vibe I can resume from.` }],
+        structuredContent: {
+          found: true,
+          subject: { type: "live_vibe", id: latestVibe.postId },
+          phase: "already_live",
+          knownIds: {
+            postId: latestVibe.postId,
+            ...(latestVibe.capsuleId ? { capsuleId: latestVibe.capsuleId } : {})
+          },
+          vibe: latestVibe,
+          nextSafeAction: "Build share copy, inspect launch polish, or review engagement follow-up.",
+          requiresConfirmation: false,
+          recommendedToolCall: { name: "get_vibe_share_link", arguments: { postId: latestVibe.postId } }
+        }
+      };
+    }
+
+    return {
+      content: [{ type: "text", text: "No recent publish flow was found for this Vibecodr account." }],
+      structuredContent: {
+        found: false,
+        subject: { type: "none", id: "" },
+        phase: "no_recent_publish_flow",
+        knownIds: {},
+        nextSafeAction: "Review the guided publish requirements, gather the creation payload, then prepare a package before starting a new publish flow.",
+        requiresConfirmation: false,
+        recommendedToolCall: { name: "get_guided_publish_requirements", arguments: {} }
+      }
+    };
+  }
+
+  const recommendation = recommendedResumeCall(latest);
+  const postId = extractPublishedPostId(latest);
+  let vibe: LiveVibeSummary | undefined;
+  if (postId) {
+    try {
+      vibe = await deps.vibecodr.getLiveVibe(ctx, postId, {
+        telemetry: deps.telemetry,
+        traceId,
+        userId: session.userId
+      });
+    } catch {
+      vibe = undefined;
+    }
+  }
+
+  return {
+    content: [{ type: "text", text: "Resumed the latest Vibecodr publish flow from the account history." }],
+    structuredContent: {
+      found: true,
+      subject: {
+        type: vibe ? "live_vibe" : "operation",
+        id: vibe ? vibe.postId : latest.operationId
+      },
+      phase: recommendation.phase,
+      knownIds: knownIdsForOperation(latest),
+      operation: summarizeOperation(latest),
+      ...(vibe ? { vibe } : {}),
+      nextSafeAction: recommendation.nextSafeAction,
+      requiresConfirmation: recommendation.requiresConfirmation,
+      recommendedToolCall: {
+        name: recommendation.name,
+        arguments: recommendation.arguments
+      }
+    }
+  };
+}
+
 const JSON_ERROR_SCHEMA = {
   type: "object",
   required: ["error", "errorId"],
@@ -898,6 +1342,61 @@ const JSON_LIVE_VIBE_SCHEMA = {
   additionalProperties: false
 } as const;
 
+const JSON_SOCIAL_PROFILE_SCHEMA = {
+  type: "object",
+  required: ["id", "handle", "profileUrl"],
+  properties: {
+    id: { type: "string" },
+    handle: { type: "string" },
+    name: { type: ["string", "null"] },
+    avatarUrl: { type: ["string", "null"] },
+    bio: { type: ["string", "null"] },
+    plan: { type: "string" },
+    createdAt: { anyOf: [{ type: "number" }, { type: "string" }] },
+    profileUrl: { type: "string" }
+  },
+  additionalProperties: false
+} as const;
+
+const JSON_SOCIAL_SEARCH_RESULT_SCHEMA = {
+  type: "object",
+  required: ["type", "id", "title"],
+  properties: {
+    type: { type: "string", enum: ["post", "profile", "tag", "capsule", "thread", "unknown"] },
+    id: { type: "string" },
+    title: { type: "string" },
+    url: { type: "string" },
+    description: { type: "string" },
+    authorHandle: { type: "string" }
+  },
+  additionalProperties: false
+} as const;
+
+const JSON_SOCIAL_COMMENT_SCHEMA = {
+  type: "object",
+  required: ["id", "body"],
+  properties: {
+    id: { type: "string" },
+    body: { type: "string" },
+    authorHandle: { type: "string" },
+    authorName: { type: ["string", "null"] },
+    createdAt: { anyOf: [{ type: "number" }, { type: "string" }] },
+    parentCommentId: { type: ["string", "null"] },
+    score: { type: "number" }
+  },
+  additionalProperties: false
+} as const;
+
+const JSON_RECOMMENDED_TOOL_CALL_SCHEMA = {
+  type: "object",
+  required: ["name", "arguments"],
+  properties: {
+    name: { type: "string" },
+    arguments: { type: "object", additionalProperties: true }
+  },
+  additionalProperties: false
+} as const;
+
 const JSON_PUBLISH_READINESS_CHECK_SCHEMA = {
   type: "object",
   required: ["id", "level", "message"],
@@ -1031,6 +1530,60 @@ const TOOL_OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
       },
       publicPrimaryTools: { type: "array", items: { type: "string" } },
       recoveryTools: { type: "array", items: { type: "string" } }
+    },
+    additionalProperties: false
+  },
+  prepare_publish_package: {
+    type: "object",
+    required: ["canPublish", "requiredFixes", "warnings", "normalizedSummary", "suggestedArguments", "confirmationPrompt"],
+    properties: {
+      canPublish: { type: "boolean" },
+      requiredFixes: { type: "array", items: { type: "string" } },
+      warnings: { type: "array", items: { type: "string" } },
+      normalizedSummary: {
+        type: "object",
+        properties: {
+          sourceType: { type: "string", enum: SOURCE_TYPE_VALUES },
+          importMode: { type: "string", enum: ["direct_files", "zip_import", "github_import"] },
+          title: { type: "string" },
+          runner: { type: "string", enum: ["client-static", "webcontainer"] },
+          entry: { type: "string" },
+          fileCount: { type: "number" },
+          packageShape: { type: "string" },
+          idempotencyKey: { type: "string" },
+          sourceReference: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      suggestedArguments: { type: "object", additionalProperties: true },
+      confirmationPrompt: { type: "string" }
+    },
+    additionalProperties: false
+  },
+  validate_creation_payload: {
+    type: "object",
+    required: ["canPublish", "requiredFixes", "warnings", "normalizedSummary", "suggestedArguments", "confirmationPrompt"],
+    properties: {
+      canPublish: { type: "boolean" },
+      requiredFixes: { type: "array", items: { type: "string" } },
+      warnings: { type: "array", items: { type: "string" } },
+      normalizedSummary: {
+        type: "object",
+        properties: {
+          sourceType: { type: "string", enum: SOURCE_TYPE_VALUES },
+          importMode: { type: "string", enum: ["direct_files", "zip_import", "github_import"] },
+          title: { type: "string" },
+          runner: { type: "string", enum: ["client-static", "webcontainer"] },
+          entry: { type: "string" },
+          fileCount: { type: "number" },
+          packageShape: { type: "string" },
+          idempotencyKey: { type: "string" },
+          sourceReference: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      suggestedArguments: { type: "object", additionalProperties: true },
+      confirmationPrompt: { type: "string" }
     },
     additionalProperties: false
   },
@@ -1228,6 +1781,33 @@ const TOOL_OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
       JSON_AUTH_CHALLENGE_SCHEMA
     ]
   },
+  get_runtime_readiness: {
+    oneOf: [
+      {
+        type: "object",
+        required: ["state", "subject", "nextAction", "evidence"],
+        properties: {
+          state: { type: "string", enum: ["ready", "blocked", "degraded", "unknown"] },
+          subject: {
+            type: "object",
+            required: ["type", "id"],
+            properties: {
+              type: { type: "string", enum: ["operation", "draft", "live_vibe"] },
+              id: { type: "string" }
+            },
+            additionalProperties: false
+          },
+          operation: JSON_PUBLIC_OPERATION_SCHEMA,
+          blocker: { type: "string" },
+          nextAction: { type: "string" },
+          evidence: { type: "array", items: { type: "string" } }
+        },
+        additionalProperties: false
+      },
+      JSON_ERROR_SCHEMA,
+      JSON_AUTH_CHALLENGE_SCHEMA
+    ]
+  },
   explain_operation_failure: {
     oneOf: [
       {
@@ -1371,6 +1951,292 @@ const TOOL_OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
             },
             additionalProperties: false
           }
+        },
+        additionalProperties: false
+      },
+      JSON_ERROR_SCHEMA,
+      JSON_AUTH_CHALLENGE_SCHEMA
+    ]
+  },
+  resume_latest_publish_flow: {
+    oneOf: [
+      {
+        type: "object",
+        required: ["found", "phase", "knownIds", "nextSafeAction", "requiresConfirmation", "recommendedToolCall"],
+        properties: {
+          found: { type: "boolean" },
+          subject: {
+            type: "object",
+            required: ["type", "id"],
+            properties: {
+              type: { type: "string", enum: ["operation", "draft", "live_vibe", "none"] },
+              id: { type: "string" }
+            },
+            additionalProperties: false
+          },
+          phase: { type: "string" },
+          knownIds: { type: "object", additionalProperties: true },
+          operation: JSON_OPERATION_SCHEMA,
+          draft: JSON_DRAFT_SUMMARY_SCHEMA,
+          vibe: JSON_LIVE_VIBE_SCHEMA,
+          nextSafeAction: { type: "string" },
+          requiresConfirmation: { type: "boolean" },
+          recommendedToolCall: JSON_RECOMMENDED_TOOL_CALL_SCHEMA
+        },
+        additionalProperties: false
+      },
+      JSON_ERROR_SCHEMA,
+      JSON_AUTH_CHALLENGE_SCHEMA
+    ]
+  },
+  discover_vibes: {
+    oneOf: [
+      {
+        type: "object",
+        required: ["vibes", "source", "nextAction"],
+        properties: {
+          vibes: { type: "array", items: JSON_LIVE_VIBE_SCHEMA },
+          source: { type: "string" },
+          nextAction: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      JSON_ERROR_SCHEMA
+    ]
+  },
+  get_public_post: {
+    oneOf: [
+      {
+        type: "object",
+        required: ["vibe", "context"],
+        properties: {
+          vibe: JSON_LIVE_VIBE_SCHEMA,
+          context: {
+            type: "object",
+            required: ["primaryActions", "shareCopy"],
+            properties: {
+              primaryActions: { type: "array", items: { type: "string" } },
+              shareCopy: { type: "string" }
+            },
+            additionalProperties: false
+          }
+        },
+        additionalProperties: false
+      },
+      JSON_ERROR_SCHEMA
+    ]
+  },
+  get_public_profile: {
+    oneOf: [
+      {
+        type: "object",
+        required: ["profile", "nextAction"],
+        properties: {
+          profile: JSON_SOCIAL_PROFILE_SCHEMA,
+          nextAction: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      JSON_ERROR_SCHEMA
+    ]
+  },
+  search_vibecodr: {
+    oneOf: [
+      {
+        type: "object",
+        required: ["query", "results", "nextAction"],
+        properties: {
+          query: { type: "string" },
+          results: { type: "array", items: JSON_SOCIAL_SEARCH_RESULT_SCHEMA },
+          nextAction: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      JSON_ERROR_SCHEMA
+    ]
+  },
+  get_remix_lineage: {
+    oneOf: [
+      {
+        type: "object",
+        required: ["lineage", "nextAction"],
+        properties: {
+          lineage: {
+            type: "object",
+            required: ["remixes"],
+            properties: {
+              postId: { type: "string" },
+              capsuleId: { type: "string" },
+              remixes: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["id"],
+                  properties: {
+                    id: { type: "string" },
+                    title: { type: "string" },
+                    postId: { type: "string" },
+                    capsuleId: { type: "string" },
+                    authorHandle: { type: "string" },
+                    createdAt: { anyOf: [{ type: "number" }, { type: "string" }] }
+                  },
+                  additionalProperties: false
+                }
+              }
+            },
+            additionalProperties: false
+          },
+          nextAction: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      JSON_ERROR_SCHEMA
+    ]
+  },
+  get_thread_context: {
+    oneOf: [
+      {
+        type: "object",
+        required: ["thread", "nextAction"],
+        properties: {
+          thread: {
+            type: "object",
+            required: ["comments"],
+            properties: {
+              threadId: { type: "string" },
+              postId: { type: "string" },
+              title: { type: "string" },
+              url: { type: "string" },
+              comments: { type: "array", items: JSON_SOCIAL_COMMENT_SCHEMA }
+            },
+            additionalProperties: false
+          },
+          nextAction: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      JSON_ERROR_SCHEMA
+    ]
+  },
+  build_share_copy: {
+    oneOf: [
+      {
+        type: "object",
+        required: ["share"],
+        properties: {
+          share: {
+            type: "object",
+            required: ["postId", "title", "shortCopy", "longCopy", "links", "hashtags"],
+            properties: {
+              postId: { type: "string" },
+              title: { type: "string" },
+              shortCopy: { type: "string" },
+              longCopy: { type: "string" },
+              links: { type: "array", items: { type: "string" } },
+              hashtags: { type: "array", items: { type: "string" } }
+            },
+            additionalProperties: false
+          }
+        },
+        additionalProperties: false
+      },
+      JSON_ERROR_SCHEMA,
+      JSON_AUTH_CHALLENGE_SCHEMA
+    ]
+  },
+  get_launch_checklist: {
+    oneOf: [
+      {
+        type: "object",
+        required: ["postId", "checklist", "nextAction"],
+        properties: {
+          postId: { type: "string" },
+          checklist: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["id", "status", "message", "action"],
+              properties: {
+                id: { type: "string" },
+                status: { type: "string", enum: ["complete", "warning", "missing"] },
+                message: { type: "string" },
+                action: { type: "string" }
+              },
+              additionalProperties: false
+            }
+          },
+          nextAction: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      JSON_ERROR_SCHEMA,
+      JSON_AUTH_CHALLENGE_SCHEMA
+    ]
+  },
+  inspect_social_preview: {
+    oneOf: [
+      {
+        type: "object",
+        required: ["preview"],
+        properties: {
+          preview: {
+            type: "object",
+            required: ["postId", "ready", "title", "description", "imageStatus", "links", "warnings"],
+            properties: {
+              postId: { type: "string" },
+              ready: { type: "boolean" },
+              title: { type: "string" },
+              description: { type: "string" },
+              imageStatus: { type: "string" },
+              links: { type: "array", items: { type: "string" } },
+              warnings: { type: "array", items: { type: "string" } }
+            },
+            additionalProperties: false
+          }
+        },
+        additionalProperties: false
+      },
+      JSON_ERROR_SCHEMA,
+      JSON_AUTH_CHALLENGE_SCHEMA
+    ]
+  },
+  suggest_post_publish_next_steps: {
+    oneOf: [
+      {
+        type: "object",
+        required: ["postId", "priority", "nextSteps"],
+        properties: {
+          postId: { type: "string" },
+          priority: { type: "string" },
+          nextSteps: { type: "array", items: { type: "string" } }
+        },
+        additionalProperties: false
+      },
+      JSON_ERROR_SCHEMA,
+      JSON_AUTH_CHALLENGE_SCHEMA
+    ]
+  },
+  get_engagement_followup_context: {
+    oneOf: [
+      {
+        type: "object",
+        required: ["engagement", "followups"],
+        properties: {
+          engagement: {
+            type: "object",
+            required: ["postId", "title", "visibility", "playerUrl", "postUrl", "stats", "summary"],
+            properties: {
+              postId: { type: "string" },
+              title: { type: "string" },
+              visibility: { type: "string", enum: PUBLISH_VISIBILITY_VALUES },
+              playerUrl: { type: "string" },
+              postUrl: { type: "string" },
+              stats: JSON_LIVE_VIBE_STATS_SCHEMA,
+              summary: { type: "string" }
+            },
+            additionalProperties: false
+          },
+          followups: { type: "array", items: { type: "string" } }
         },
         additionalProperties: false
       },
@@ -1559,11 +2425,65 @@ const LiveVibeValidator = z.object({
   packageSummary: LiveVibePackageValidator.optional()
 });
 
+const PreparedPackageValidator = z.object({
+  canPublish: z.boolean(),
+  requiredFixes: z.array(z.string()),
+  warnings: z.array(z.string()),
+  normalizedSummary: z.object({
+    sourceType: z.enum(SOURCE_TYPE_VALUES).optional(),
+    importMode: z.enum(["direct_files", "zip_import", "github_import"]).optional(),
+    title: z.string().optional(),
+    runner: z.enum(["client-static", "webcontainer"]).optional(),
+    entry: z.string().optional(),
+    fileCount: z.number().optional(),
+    packageShape: z.string().optional(),
+    idempotencyKey: z.string().optional(),
+    sourceReference: z.string().optional()
+  }),
+  suggestedArguments: z.object({}).passthrough(),
+  confirmationPrompt: z.string()
+});
+
+const SocialProfileValidator = z.object({
+  id: z.string(),
+  handle: z.string(),
+  name: z.string().nullable().optional(),
+  avatarUrl: z.string().nullable().optional(),
+  bio: z.string().nullable().optional(),
+  plan: z.string().optional(),
+  createdAt: z.union([z.number(), z.string()]).optional(),
+  profileUrl: z.string()
+});
+
+const SocialSearchResultValidator = z.object({
+  type: z.enum(["post", "profile", "tag", "capsule", "thread", "unknown"]),
+  id: z.string(),
+  title: z.string(),
+  url: z.string().optional(),
+  description: z.string().optional(),
+  authorHandle: z.string().optional()
+});
+
+const SocialCommentValidator = z.object({
+  id: z.string(),
+  body: z.string(),
+  authorHandle: z.string().optional(),
+  authorName: z.string().nullable().optional(),
+  createdAt: z.union([z.number(), z.string()]).optional(),
+  parentCommentId: z.string().nullable().optional(),
+  score: z.number().optional()
+});
+
+const RecommendedToolCallValidator = z.object({
+  name: z.string(),
+  arguments: z.object({}).passthrough()
+});
+
 const ErrorStructuredValidator = z.object({
   error: z.string(),
   message: z.string().optional(),
   errorId: z.string()
-});
+}).passthrough();
 
 const AuthChallengeValidator = z.object({
   authRequired: z.literal(true),
@@ -1624,6 +2544,8 @@ const ToolOutputValidators: Record<string, z.ZodTypeAny> = {
     publicPrimaryTools: z.array(z.string()),
     recoveryTools: z.array(z.string())
   }),
+  prepare_publish_package: PreparedPackageValidator,
+  validate_creation_payload: PreparedPackageValidator,
   get_launch_best_practices: z.object({
     headline: z.string(),
     summary: z.string(),
@@ -1729,6 +2651,21 @@ const ToolOutputValidators: Record<string, z.ZodTypeAny> = {
     ErrorStructuredValidator,
     AuthChallengeValidator
   ]),
+  get_runtime_readiness: z.union([
+    z.object({
+      state: z.enum(["ready", "blocked", "degraded", "unknown"]),
+      subject: z.object({
+        type: z.enum(["operation", "draft", "live_vibe"]),
+        id: z.string()
+      }),
+      operation: PublicOperationValidator.optional(),
+      blocker: z.string().optional(),
+      nextAction: z.string(),
+      evidence: z.array(z.string())
+    }),
+    ErrorStructuredValidator,
+    AuthChallengeValidator
+  ]),
   explain_operation_failure: z.union([
     z.object({
       status: z.enum(ALLOWED_OPERATION_STATUSES),
@@ -1798,6 +2735,157 @@ const ToolOutputValidators: Record<string, z.ZodTypeAny> = {
     ErrorStructuredValidator,
     AuthChallengeValidator
   ]),
+  resume_latest_publish_flow: z.union([
+    z.object({
+      found: z.boolean(),
+      subject: z.object({
+        type: z.enum(["operation", "draft", "live_vibe", "none"]),
+        id: z.string()
+      }).optional(),
+      phase: z.string(),
+      knownIds: z.object({}).passthrough(),
+      operation: OperationValidator.optional(),
+      draft: DraftSummaryValidator.optional(),
+      vibe: LiveVibeValidator.optional(),
+      nextSafeAction: z.string(),
+      requiresConfirmation: z.boolean(),
+      recommendedToolCall: RecommendedToolCallValidator
+    }),
+    ErrorStructuredValidator,
+    AuthChallengeValidator
+  ]),
+  discover_vibes: z.union([
+    z.object({
+      vibes: z.array(LiveVibeValidator),
+      source: z.string(),
+      nextAction: z.string()
+    }),
+    ErrorStructuredValidator
+  ]),
+  get_public_post: z.union([
+    z.object({
+      vibe: LiveVibeValidator,
+      context: z.object({
+        primaryActions: z.array(z.string()),
+        shareCopy: z.string()
+      })
+    }),
+    ErrorStructuredValidator
+  ]),
+  get_public_profile: z.union([
+    z.object({
+      profile: SocialProfileValidator,
+      nextAction: z.string()
+    }),
+    ErrorStructuredValidator
+  ]),
+  search_vibecodr: z.union([
+    z.object({
+      query: z.string(),
+      results: z.array(SocialSearchResultValidator),
+      nextAction: z.string()
+    }),
+    ErrorStructuredValidator
+  ]),
+  get_remix_lineage: z.union([
+    z.object({
+      lineage: z.object({
+        postId: z.string().optional(),
+        capsuleId: z.string().optional(),
+        remixes: z.array(z.object({
+          id: z.string(),
+          title: z.string().optional(),
+          postId: z.string().optional(),
+          capsuleId: z.string().optional(),
+          authorHandle: z.string().optional(),
+          createdAt: z.union([z.number(), z.string()]).optional()
+        }))
+      }),
+      nextAction: z.string()
+    }),
+    ErrorStructuredValidator
+  ]),
+  get_thread_context: z.union([
+    z.object({
+      thread: z.object({
+        threadId: z.string().optional(),
+        postId: z.string().optional(),
+        title: z.string().optional(),
+        url: z.string().optional(),
+        comments: z.array(SocialCommentValidator)
+      }),
+      nextAction: z.string()
+    }),
+    ErrorStructuredValidator
+  ]),
+  build_share_copy: z.union([
+    z.object({
+      share: z.object({
+        postId: z.string(),
+        title: z.string(),
+        shortCopy: z.string(),
+        longCopy: z.string(),
+        links: z.array(z.string()),
+        hashtags: z.array(z.string())
+      })
+    }),
+    ErrorStructuredValidator,
+    AuthChallengeValidator
+  ]),
+  get_launch_checklist: z.union([
+    z.object({
+      postId: z.string(),
+      checklist: z.array(z.object({
+        id: z.string(),
+        status: z.enum(["complete", "warning", "missing"]),
+        message: z.string(),
+        action: z.string()
+      })),
+      nextAction: z.string()
+    }),
+    ErrorStructuredValidator,
+    AuthChallengeValidator
+  ]),
+  inspect_social_preview: z.union([
+    z.object({
+      preview: z.object({
+        postId: z.string(),
+        ready: z.boolean(),
+        title: z.string(),
+        description: z.string(),
+        imageStatus: z.string(),
+        links: z.array(z.string()),
+        warnings: z.array(z.string())
+      })
+    }),
+    ErrorStructuredValidator,
+    AuthChallengeValidator
+  ]),
+  suggest_post_publish_next_steps: z.union([
+    z.object({
+      postId: z.string(),
+      priority: z.string(),
+      nextSteps: z.array(z.string())
+    }),
+    ErrorStructuredValidator,
+    AuthChallengeValidator
+  ]),
+  get_engagement_followup_context: z.union([
+    z.object({
+      engagement: z.object({
+        postId: z.string(),
+        title: z.string(),
+        visibility: z.enum(PUBLISH_VISIBILITY_VALUES),
+        playerUrl: z.string(),
+        postUrl: z.string(),
+        stats: LiveVibeStatsValidator,
+        summary: z.string()
+      }),
+      followups: z.array(z.string())
+    }),
+    ErrorStructuredValidator,
+    AuthChallengeValidator
+  ]),
   update_live_vibe_metadata: z.union([z.object({ vibe: LiveVibeValidator }), ErrorStructuredValidator, AuthChallengeValidator]),
   start_creation_import: z.union([
     z.object({ operation: PublicOperationValidator }),
@@ -1847,6 +2935,7 @@ const ToolOutputValidators: Record<string, z.ZodTypeAny> = {
 function withValidatedStructuredContent(toolName: string, result: ToolResult): ToolResult {
   if (result.structuredContent === undefined) return result;
   const validator = ToolOutputValidators[toolName] || ToolOutputValidators["unknown_tool"];
+  if (!validator) return result;
   const parsed = validator.safeParse(result.structuredContent);
   if (parsed.success) {
     return { ...result, structuredContent: parsed.data };
@@ -1860,10 +2949,11 @@ function withValidatedStructuredContent(toolName: string, result: ToolResult): T
   };
 }
 
-export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?: boolean }): ToolDescriptor[] {
-  const tools: ToolDescriptor[] = [
+export function getTools(options?: { includeOutputSchema?: boolean; includeHidden?: boolean }): ToolDescriptor[] {
+  const tools: RegisteredToolDescriptor[] = [
     {
       name: "get_vibecodr_platform_overview",
+      visibility: "public",
       title: "Get Vibecodr Platform Overview",
       description:
         "Use this when the user asks what Vibecodr is, how it works as a social platform, what makes a vibe different from a normal app, or what people can do after publishing.",
@@ -1871,10 +2961,11 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       outputSchema: TOOL_OUTPUT_SCHEMAS["get_vibecodr_platform_overview"],
-      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
     },
     {
       name: "get_guided_publish_requirements",
+      visibility: "public",
       title: "Get Guided Publish Requirements",
       description:
         "Use this before leading a user through publishing when you need to know what questions to ask, what to default for them, and how to keep the flow guided instead of pushing work back onto the user. Treat final publish as a confirmed write step, then close with a premium launch summary instead of a generic success line.",
@@ -1882,21 +2973,63 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       outputSchema: TOOL_OUTPUT_SCHEMAS["get_guided_publish_requirements"],
-      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
     },
     {
       name: "get_upload_capabilities",
+      visibility: "public",
       title: "Get Upload Capabilities",
       description:
-        "Use this when the user explicitly asks what import modes, runners, or limits Vibecodr supports. Do not use it as the default publish step; prefer quick_publish_creation for the normal guided flow. Public is the default visibility unless the user asks for unlisted or private.",
+        "Use this as the first safe read when a fresh model needs import modes, payload shape, runners, limits, or guided publish defaults before any write. After this read, prefer quick_publish_creation for the normal guided flow. Public is the default visibility unless the user asks for unlisted or private.",
       securitySchemes: NOAUTH_SECURITY_SCHEMES,
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       outputSchema: TOOL_OUTPUT_SCHEMAS["get_upload_capabilities"],
-      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
+    },
+    {
+      name: "prepare_publish_package",
+      visibility: "public",
+      title: "Prepare Publish Package",
+      description:
+        "Use this as the no-write preparation step before publishing. It validates and normalizes the same sourceType/payload shape as quick_publish_creation, infers entry/title/runner/package shape, returns required fixes and suggested arguments, and never creates operations, capsules, posts, artifacts, thumbnails, or live vibes.",
+      securitySchemes: NOAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        required: ["sourceType", "payload"],
+        properties: {
+          sourceType: { type: "string", enum: SOURCE_TYPE_VALUES },
+          payload: CREATION_PAYLOAD_INPUT_SCHEMA
+        },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["prepare_publish_package"],
+      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
+    },
+    {
+      name: "validate_creation_payload",
+      visibility: "public",
+      title: "Validate Creation Payload",
+      description:
+        "Compatibility alias for prepare_publish_package. Use it when a client or model asks for validation language; it performs the same no-write package preparation and returns the same structured result.",
+      securitySchemes: NOAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        required: ["sourceType", "payload"],
+        properties: {
+          sourceType: { type: "string", enum: SOURCE_TYPE_VALUES },
+          payload: CREATION_PAYLOAD_INPUT_SCHEMA
+        },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["validate_creation_payload"],
+      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
     },
     {
       name: "get_launch_best_practices",
+      visibility: "public",
       title: "Get Launch Best Practices",
       description:
         "Use this when the conversation needs a premium launch checklist. It should tell the model when to proactively offer a cover image, when to offer SEO polish, and how to keep a public vibe launch intentional instead of bare-minimum.",
@@ -1904,10 +3037,11 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       outputSchema: TOOL_OUTPUT_SCHEMAS["get_launch_best_practices"],
-      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
     },
     {
       name: "get_pulse_setup_guidance",
+      visibility: "public",
       title: "Get Pulse Setup Guidance",
       description:
         "Use this when the app may need backend logic, server actions, secrets, scheduled work, or webhook-style behavior. It should help the model decide when frontend-only is enough and when Vibecodr pulses are the right architecture.",
@@ -1915,10 +3049,11 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       outputSchema: TOOL_OUTPUT_SCHEMAS["get_pulse_setup_guidance"],
-      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
     },
     {
       name: "get_account_capabilities",
+      visibility: "public",
       title: "Get Account Capabilities",
       description:
         "Use this after the user is connected and before promising premium polish or backend features. It should tell the model what the current Vibecodr account can actually do, including public-vs-private visibility, custom SEO, and pulse/server-action capacity.",
@@ -1926,30 +3061,33 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       outputSchema: TOOL_OUTPUT_SCHEMAS["get_account_capabilities"],
-      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
     },
     {
       name: "list_import_operations",
+      visibility: "recovery",
       title: "List Import Operations",
       description: "Advanced recovery only. Use this only when the guided publish flow already failed or the user explicitly asks to inspect recent operations.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
       inputSchema: { type: "object", properties: { limit: { type: "integer", minimum: 1, maximum: 100 } } },
       outputSchema: TOOL_OUTPUT_SCHEMAS["list_import_operations"],
-      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
     },
     {
       name: "get_import_operation",
+      visibility: "recovery",
       title: "Get Import Operation",
       description: "Advanced recovery only. Use this only when the guided publish flow already has an operation id that needs deeper inspection.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
       inputSchema: { type: "object", required: ["operationId"], properties: { operationId: { type: "string" } } },
       outputSchema: TOOL_OUTPUT_SCHEMAS["get_import_operation"],
-      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
     },
     {
       name: "watch_operation",
+      visibility: "recovery",
       title: "Watch Operation",
       description: "Advanced recovery only. Use this after a draft or publish run already exists and the conversation specifically needs monitored status updates.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
@@ -1986,10 +3124,11 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
         additionalProperties: false
       },
       outputSchema: TOOL_OUTPUT_SCHEMAS["watch_operation"],
-      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
     },
     {
       name: "get_publish_readiness",
+      visibility: "public",
       title: "Get Publish Readiness",
       description: "Use this as the default readiness check before reaching for operation internals. It should answer whether anything still blocks launch and what the next user-facing step is.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
@@ -2007,7 +3146,46 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
       _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
     },
     {
+      name: "get_runtime_readiness",
+      visibility: "public",
+      title: "Get Runtime Readiness",
+      description: "Use this when the user needs user-facing launch/runtime state for a known publish operation, draft, or live vibe. Prefer operationId during a current publish flow; use postId for an already-live vibe and draftId only for a safe draft summary. Return one next action without exposing raw manifests, iframe internals, CSP details, or telemetry rows.",
+      securitySchemes: OAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        properties: {
+          operationId: { type: "string" },
+          capsuleId: { type: "string" },
+          postId: { type: "string" },
+          draftId: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["get_runtime_readiness"],
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
+    },
+    {
+      name: "resume_latest_publish_flow",
+      visibility: "public",
+      title: "Resume Latest Publish Flow",
+      description:
+        "Use this when the user wants to continue a publish or launch conversation but does not know the operationId. It reads the connected account's latest publish flow, returns safe known ids, and recommends the next tool without performing a write.",
+      securitySchemes: OAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        properties: {
+          limit: { type: "integer", minimum: 1, maximum: 20 }
+        },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["resume_latest_publish_flow"],
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
+    },
+    {
       name: "explain_operation_failure",
+      visibility: "recovery",
       title: "Explain Operation Failure",
       description: "Use this only after the guided publish flow fails and the user needs a plain-language explanation plus a single concrete recovery step.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
@@ -2021,10 +3199,11 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
         additionalProperties: false
       },
       outputSchema: TOOL_OUTPUT_SCHEMAS["explain_operation_failure"],
-      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
     },
     {
       name: "list_vibecodr_drafts",
+      visibility: "public",
       title: "List Vibecodr Drafts",
       description: "Use this when the user explicitly wants to browse existing drafts. Otherwise prefer quick_publish_creation or get_vibecodr_draft for the current publish decision.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
@@ -2035,6 +3214,7 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
     },
     {
       name: "get_vibecodr_draft",
+      visibility: "public",
       title: "Get Vibecodr Draft",
       description: "Use this when you need a safe summary of one draft from Vibecodr for the next publishing decision.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
@@ -2045,6 +3225,7 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
     },
     {
       name: "list_my_live_vibes",
+      visibility: "public",
       title: "List My Live Vibes",
       description: "Use this when the user wants to inspect what is already live on Vibecodr, continue from a recent publish, or manage an existing vibe instead of creating a brand-new one.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
@@ -2058,10 +3239,11 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
         additionalProperties: false
       },
       outputSchema: TOOL_OUTPUT_SCHEMAS["list_my_live_vibes"],
-      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
     },
     {
       name: "get_live_vibe",
+      visibility: "public",
       title: "Get Live Vibe",
       description: "Use this when the conversation is about one already-published vibe and the model needs its live state, share links, or package summary.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
@@ -2073,10 +3255,11 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
         additionalProperties: false
       },
       outputSchema: TOOL_OUTPUT_SCHEMAS["get_live_vibe"],
-      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
     },
     {
       name: "get_vibe_engagement_summary",
+      visibility: "public",
       title: "Get Vibe Engagement Summary",
       description: "Use this when the user wants to know how a published vibe is performing or what people can do with it now that it is live.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
@@ -2088,10 +3271,11 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
         additionalProperties: false
       },
       outputSchema: TOOL_OUTPUT_SCHEMAS["get_vibe_engagement_summary"],
-      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
     },
     {
       name: "get_vibe_share_link",
+      visibility: "public",
       title: "Get Vibe Share Link",
       description: "Use this when the user wants the best link to share a live vibe or wants to understand how the vibe will open for other people.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
@@ -2103,12 +3287,214 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
         additionalProperties: false
       },
       outputSchema: TOOL_OUTPUT_SCHEMAS["get_vibe_share_link"],
-      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
+    },
+    {
+      name: "discover_vibes",
+      visibility: "public",
+      title: "Discover Public Vibes",
+      description:
+        "Use this to read Vibecodr's public discovery feed or public discovery search without requiring account auth. It returns safe public vibe summaries for zero-context models that need to understand what exists before suggesting sharing, remixing, or inspiration.",
+      securitySchemes: NOAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 50 },
+          offset: { type: "integer", minimum: 0, maximum: 500 }
+        },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["discover_vibes"],
+      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
+    },
+    {
+      name: "get_public_post",
+      visibility: "public",
+      title: "Get Public Post",
+      description:
+        "Use this to inspect one public Vibecodr post by postId without account auth. It returns the live player/post links, public stats, and next social actions rather than raw source or private owner data.",
+      securitySchemes: NOAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        required: ["postId"],
+        properties: { postId: { type: "string" } },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["get_public_post"],
+      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
+    },
+    {
+      name: "get_public_profile",
+      visibility: "public",
+      title: "Get Public Profile",
+      description:
+        "Use this to read a public Vibecodr profile by handle without account auth. It is for profile context and attribution, not private account capability checks.",
+      securitySchemes: NOAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        required: ["handle"],
+        properties: { handle: { type: "string" } },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["get_public_profile"],
+      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
+    },
+    {
+      name: "search_vibecodr",
+      visibility: "public",
+      title: "Search Vibecodr",
+      description:
+        "Use this to search public Vibecodr posts, profiles, tags, threads, or capsules without account auth. It returns compact result summaries so fresh models do not guess at public social context.",
+      securitySchemes: NOAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        required: ["query"],
+        properties: {
+          query: { type: "string" },
+          types: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 50 },
+          offset: { type: "integer", minimum: 0, maximum: 500 }
+        },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["search_vibecodr"],
+      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
+    },
+    {
+      name: "get_remix_lineage",
+      visibility: "public",
+      title: "Get Remix Lineage",
+      description:
+        "Use this to read public remix lineage for a postId or capsuleId. It helps models talk about fork/remix context without exposing source internals.",
+      securitySchemes: NOAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        properties: {
+          postId: { type: "string" },
+          capsuleId: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["get_remix_lineage"],
+      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
+    },
+    {
+      name: "get_thread_context",
+      visibility: "public",
+      title: "Get Thread Context",
+      description:
+        "Use this to read public thread or comment context for a Vibecodr post. It returns public comments only and does not perform moderation, author actions, or private data reads.",
+      securitySchemes: NOAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadId: { type: "string" },
+          postId: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 50 },
+          offset: { type: "integer", minimum: 0, maximum: 500 }
+        },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["get_thread_context"],
+      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
+    },
+    {
+      name: "build_share_copy",
+      visibility: "public",
+      title: "Build Share Copy",
+      description:
+        "Use this after publish to turn a live vibe into concise share copy and links. It reads the live vibe and returns launch language; it does not update metadata or post on the user's behalf.",
+      securitySchemes: OAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        required: ["postId"],
+        properties: { postId: { type: "string" } },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["build_share_copy"],
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
+    },
+    {
+      name: "get_launch_checklist",
+      visibility: "public",
+      title: "Get Launch Checklist",
+      description:
+        "Use this after a vibe is live to check the user-facing launch basics: link, visibility, cover, description, and engagement follow-up. It returns actions, not raw runtime internals.",
+      securitySchemes: OAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        required: ["postId"],
+        properties: { postId: { type: "string" } },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["get_launch_checklist"],
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
+    },
+    {
+      name: "inspect_social_preview",
+      visibility: "public",
+      title: "Inspect Social Preview",
+      description:
+        "Use this after publish to inspect whether the vibe has the public-facing title, description, image, and links needed for a clean social preview. It is read-only guidance for polish decisions.",
+      securitySchemes: OAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        required: ["postId"],
+        properties: { postId: { type: "string" } },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["inspect_social_preview"],
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
+    },
+    {
+      name: "suggest_post_publish_next_steps",
+      visibility: "public",
+      title: "Suggest Post Publish Next Steps",
+      description:
+        "Use this after publish when a fresh model needs one focused next move for the live vibe: share, polish, reply, or inspect remix/engagement context.",
+      securitySchemes: OAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        required: ["postId"],
+        properties: { postId: { type: "string" } },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["suggest_post_publish_next_steps"],
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
+    },
+    {
+      name: "get_engagement_followup_context",
+      visibility: "public",
+      title: "Get Engagement Followup Context",
+      description:
+        "Use this after a vibe has started collecting activity. It reads public engagement totals for the connected user's live vibe and returns concrete follow-up guidance.",
+      securitySchemes: OAUTH_SECURITY_SCHEMES,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+      inputSchema: {
+        type: "object",
+        required: ["postId"],
+        properties: { postId: { type: "string" } },
+        additionalProperties: false
+      },
+      outputSchema: TOOL_OUTPUT_SCHEMAS["get_engagement_followup_context"],
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
     },
     {
       name: "update_live_vibe_metadata",
+      visibility: "public",
       title: "Update Live Vibe Metadata",
-      description: "Use this when the user wants to refine a live vibe after publish, such as changing visibility, replacing the thumbnail, or updating SEO metadata. Prefer thumbnailFile with an OpenAI-hosted file reference from the ChatGPT widget upload APIs. Use thumbnailUpload only as a fallback when no hosted file reference is available, and keep the raw file under 900 KB so the inline MCP payload stays reliable.",
+      description: "Use this when the user wants to refine a live vibe after publish, such as changing visibility, replacing the thumbnail, or updating SEO metadata. Prefer thumbnailFile when the MCP client can provide a hosted file reference. Use thumbnailUpload only as a fallback when no hosted file reference is available, and keep the raw file under 900 KB so the inline MCP payload stays reliable.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
       inputSchema: {
@@ -2116,6 +3502,7 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
         required: ["postId"],
         properties: {
           postId: { type: "string" },
+          confirmed: CONFIRMED_WRITE_INPUT_SCHEMA,
           visibility: { type: "string", enum: PUBLISH_VISIBILITY_VALUES },
           coverKey: { type: "string" },
           thumbnailFile: THUMBNAIL_FILE_INPUT_SCHEMA,
@@ -2151,10 +3538,11 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
         additionalProperties: false
       },
       outputSchema: TOOL_OUTPUT_SCHEMAS["update_live_vibe_metadata"],
-      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES, false)
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
     },
     {
       name: "start_creation_import",
+      visibility: "recovery",
       title: "Start Creation Import",
       description:
         "Use this only when the user explicitly wants a draft-first flow or quick publish is not appropriate. Gather the minimum missing details, set payload.entry explicitly whenever the runnable file is obvious, infer entry/title when needed, and only ask one precise follow-up if the package still lacks a runnable entry. Do not turn a draft-first step into an implicit publish. " + CREATION_PAYLOAD_REQUIREMENTS_TEXT,
@@ -2170,16 +3558,11 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
         additionalProperties: false
       },
       outputSchema: TOOL_OUTPUT_SCHEMAS["start_creation_import"],
-      _meta: {
-        ...toolMetaBase(OAUTH_SECURITY_SCHEMES),
-        ui: { resourceUri: "ui://widget/publisher-v1", visibility: ["model", "app"] },
-        "openai/outputTemplate": "ui://widget/publisher-v1",
-        "openai/toolInvocation/invoking": "Importing creation",
-        "openai/toolInvocation/invoked": "Import operation updated"
-      }
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
     },
     {
       name: "compile_draft_capsule",
+      visibility: "recovery",
       title: "Compile Draft Capsule",
       description: "Advanced recovery only. Use this when a manual compile retry is needed after a draft already exists and the guided publish flow cannot continue cleanly on its own.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
@@ -2194,17 +3577,19 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
     },
     {
       name: "quick_publish_creation",
+      visibility: "public",
       title: "Quick Publish Creation",
       description:
-        "Use this for the default guided path after the user has clearly confirmed they want to publish: import a generated creation, include payload.entry explicitly whenever the runnable file is obvious, infer it when needed, wait for draft readiness, compile it, and publish it as a live vibe people can run, remix, comment on, like, and share by URL. Public is the default visibility unless the user explicitly asks for unlisted or private. Prefer thumbnailFile with an OpenAI-hosted file reference from the ChatGPT widget upload APIs when attaching launch art; use thumbnailUpload only as a fallback, and keep the raw file under 900 KB when you must inline it. Ask only the missing launch questions, ask for explicit publish confirmation before invoking this tool, and if entry inference fails ask one exact question about which file starts the app. Once it succeeds, pivot immediately to shareability and the best next move. " + CREATION_PAYLOAD_REQUIREMENTS_TEXT,
+        "Use this for the default guided path after the user has clearly confirmed they want to publish and you can pass confirmed: true: import a generated creation, include payload.entry explicitly whenever the runnable file is obvious, infer it when needed, wait for draft readiness, compile it, and publish it as a live vibe people can run, remix, comment on, like, and share by URL. Public is the default visibility unless the user explicitly asks for unlisted or private. Prefer thumbnailFile with a hosted file reference when attaching launch art; use thumbnailUpload only as a fallback, and keep the raw file under 900 KB when you must inline it. Ask only the missing launch questions, ask for explicit publish confirmation before invoking this tool, and if entry inference fails ask one exact question about which file starts the app. Once it succeeds, pivot immediately to shareability and the best next move. " + CREATION_PAYLOAD_REQUIREMENTS_TEXT,
       securitySchemes: OAUTH_SECURITY_SCHEMES,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
       inputSchema: {
         type: "object",
-        required: ["sourceType", "payload"],
+        required: ["sourceType", "payload", "confirmed"],
         properties: {
           sourceType: { type: "string", enum: SOURCE_TYPE_VALUES },
           payload: CREATION_PAYLOAD_INPUT_SCHEMA,
+          confirmed: CONFIRMED_WRITE_INPUT_SCHEMA,
           autoCompile: { type: "boolean" },
           timeoutSeconds: { type: "number", minimum: 5, maximum: 600 },
           pollIntervalMs: { type: "integer", minimum: 250, maximum: 10000 },
@@ -2243,19 +3628,14 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
         additionalProperties: false
       },
       outputSchema: TOOL_OUTPUT_SCHEMAS["quick_publish_creation"],
-      _meta: {
-        ...toolMetaBase(OAUTH_SECURITY_SCHEMES),
-        ui: { resourceUri: "ui://widget/publisher-v1", visibility: ["model", "app"] },
-        "openai/outputTemplate": "ui://widget/publisher-v1",
-        "openai/toolInvocation/invoking": "Importing and publishing creation",
-        "openai/toolInvocation/invoked": "Quick publish flow completed"
-      }
+      _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
     },
     {
       name: "publish_draft_capsule",
+      visibility: "recovery",
       title: "Publish Draft Capsule",
       description:
-        "Advanced recovery only. Use this when a draft is already staged and the conversation deliberately needs a manual publish step after the default quick-publish path has been bypassed or failed. Prefer thumbnailFile with an OpenAI-hosted file reference from the ChatGPT widget upload APIs when attaching launch art; use thumbnailUpload only as a fallback, and keep the raw file under 900 KB when you must inline it. Ask for explicit publish confirmation before invoking it.",
+        "Advanced recovery only. Use this when a draft is already staged and the conversation deliberately needs a manual publish step after the default quick-publish path has been bypassed or failed. Prefer thumbnailFile with a hosted file reference when attaching launch art; use thumbnailUpload only as a fallback, and keep the raw file under 900 KB when you must inline it. Ask for explicit publish confirmation before invoking it.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       inputSchema: {
@@ -2264,6 +3644,7 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
         properties: {
           operationId: { type: "string" },
           capsuleId: { type: "string" },
+          confirmed: CONFIRMED_WRITE_INPUT_SCHEMA,
           visibility: { type: "string", enum: PUBLISH_VISIBILITY_VALUES },
           coverKey: { type: "string" },
           thumbnailFile: THUMBNAIL_FILE_INPUT_SCHEMA,
@@ -2303,18 +3684,28 @@ export function getTools(options?: { includeOutputSchema?: boolean; supportsUi?:
     },
     {
       name: "cancel_import_operation",
+      visibility: "recovery",
       title: "Cancel Import Operation",
       description: "Advanced recovery only. Use this when the user explicitly wants to stop an in-progress operation.",
       securitySchemes: OAUTH_SECURITY_SCHEMES,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
-      inputSchema: { type: "object", required: ["operationId"], properties: { operationId: { type: "string" } } },
+      inputSchema: {
+        type: "object",
+        required: ["operationId"],
+        properties: {
+          operationId: { type: "string" },
+          confirmed: CONFIRMED_WRITE_INPUT_SCHEMA
+        },
+        additionalProperties: false
+      },
       outputSchema: TOOL_OUTPUT_SCHEMAS["cancel_import_operation"],
       _meta: toolMetaBase(OAUTH_SECURITY_SCHEMES)
     }
   ];
 
-  const presented = tools.map((tool) => sanitizeToolDescriptorForPresentation(tool, options));
-  return options?.includeOutputSchema ? presented : presented.map(stripOutputSchemaFromDescriptor);
+  const visibleTools = options?.includeHidden ? tools : tools.filter((tool) => tool.visibility === "public");
+  const descriptors = visibleTools.map(stripInternalToolFields);
+  return options?.includeOutputSchema ? descriptors : descriptors.map(stripOutputSchemaFromDescriptor);
 }
 
 async function callToolImpl(
@@ -2345,25 +3736,37 @@ async function callToolImpl(
         },
         publicPrimaryTools: [
           "get_vibecodr_platform_overview",
-          "get_guided_publish_requirements",
-          "get_launch_best_practices",
           "get_pulse_setup_guidance",
+          "prepare_publish_package",
+          "get_account_capabilities",
           "quick_publish_creation",
           "get_publish_readiness",
+          "get_runtime_readiness",
+          "resume_latest_publish_flow",
+          "list_vibecodr_drafts",
           "get_vibecodr_draft",
           "list_my_live_vibes",
           "get_live_vibe",
+          "discover_vibes",
+          "get_public_post",
+          "get_public_profile",
+          "search_vibecodr",
+          "get_remix_lineage",
+          "get_thread_context",
           "get_vibe_engagement_summary",
-          "get_vibe_share_link"
+          "get_vibe_share_link",
+          "build_share_copy",
+          "get_launch_checklist",
+          "inspect_social_preview",
+          "suggest_post_publish_next_steps",
+          "get_engagement_followup_context",
+          "update_live_vibe_metadata"
         ],
         recoveryTools: [
-          "watch_operation",
-          "get_import_operation",
-          "list_import_operations",
-          "compile_draft_capsule",
-          "publish_draft_capsule",
-          "explain_operation_failure",
-          "cancel_import_operation"
+          "get_publish_readiness",
+          "get_runtime_readiness",
+          "resume_latest_publish_flow",
+          "explain_operation_failure"
         ]
       }
     };
@@ -2608,29 +4011,189 @@ async function callToolImpl(
         },
         primaryTools: [
           "get_vibecodr_platform_overview",
-          "get_guided_publish_requirements",
-          "get_launch_best_practices",
           "get_pulse_setup_guidance",
+          "prepare_publish_package",
           "get_account_capabilities",
           "quick_publish_creation",
           "get_publish_readiness",
+          "get_runtime_readiness",
+          "resume_latest_publish_flow",
+          "list_vibecodr_drafts",
           "get_vibecodr_draft",
           "list_my_live_vibes",
           "get_live_vibe",
+          "discover_vibes",
+          "get_public_post",
+          "get_public_profile",
+          "search_vibecodr",
+          "get_remix_lineage",
+          "get_thread_context",
           "get_vibe_engagement_summary",
-          "get_vibe_share_link"
+          "get_vibe_share_link",
+          "build_share_copy",
+          "get_launch_checklist",
+          "inspect_social_preview",
+          "suggest_post_publish_next_steps",
+          "get_engagement_followup_context",
+          "update_live_vibe_metadata"
         ],
         recoveryTools: [
-          "watch_operation",
-          "get_import_operation",
-          "list_import_operations",
-          "compile_draft_capsule",
-          "publish_draft_capsule",
-          "explain_operation_failure",
-          "cancel_import_operation"
+          "get_publish_readiness",
+          "get_runtime_readiness",
+          "resume_latest_publish_flow",
+          "explain_operation_failure"
         ]
       }
     };
+  }
+
+  if (name === "prepare_publish_package" || name === "validate_creation_payload") {
+    return preparePublishPackageResult(args, deps);
+  }
+
+  if (name === "discover_vibes") {
+    try {
+      const limit = parseBoundedIntegerArg(args["limit"], 10, 50);
+      const offset = parseOffsetArg(args["offset"]);
+      const query = optionalStringArg(args["query"]);
+      const vibes = await deps.vibecodr.discoverVibes(
+        { limit, offset, ...(query ? { query } : {}) },
+        { telemetry: deps.telemetry, traceId }
+      );
+      return {
+        content: [{ type: "text", text: `Retrieved ${vibes.length} public Vibecodr vibes.` }],
+        structuredContent: {
+          vibes,
+          source: query ? "public_discovery_search" : "public_discovery_feed",
+          nextAction: vibes.length
+            ? "Inspect a public post, profile, remix lineage, or thread context before making social recommendations."
+            : "Try a more specific search query or inspect a known public post."
+        }
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return toolErrorResult("discover_vibes failed: " + message, "DISCOVER_VIBES_FAILED", message);
+    }
+  }
+
+  if (name === "get_public_post") {
+    try {
+      const postId = requiredStringArg(args, "postId");
+      const vibe = await deps.vibecodr.getPublicPost(postId, { telemetry: deps.telemetry, traceId });
+      const share = buildShareCopyForVibe(vibe);
+      return {
+        content: [{ type: "text", text: `${vibe.title} is public on Vibecodr.` }],
+        structuredContent: {
+          vibe,
+          context: {
+            primaryActions: [
+              "Open the live player link.",
+              "Read public thread context before replying or summarizing reactions.",
+              "Inspect remix lineage before describing fork/remix activity."
+            ],
+            shareCopy: share.shortCopy
+          }
+        }
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return toolErrorResult("get_public_post failed: " + message, "GET_PUBLIC_POST_FAILED", message);
+    }
+  }
+
+  if (name === "get_public_profile") {
+    try {
+      const handle = requiredStringArg(args, "handle");
+      const profile = await deps.vibecodr.getPublicProfile(handle, { telemetry: deps.telemetry, traceId });
+      return {
+        content: [{ type: "text", text: `Retrieved public Vibecodr profile @${profile.handle}.` }],
+        structuredContent: {
+          profile,
+          nextAction: "Use search_vibecodr or discover_vibes when you need public post context for this creator."
+        }
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return toolErrorResult("get_public_profile failed: " + message, "GET_PUBLIC_PROFILE_FAILED", message);
+    }
+  }
+
+  if (name === "search_vibecodr") {
+    try {
+      const query = requiredStringArg(args, "query");
+      const types = optionalStringArg(args["types"]);
+      const limit = parseBoundedIntegerArg(args["limit"], 10, 50);
+      const offset = parseOffsetArg(args["offset"]);
+      const results = await deps.vibecodr.searchVibecodr(
+        { query, ...(types ? { types } : {}), limit, offset },
+        { telemetry: deps.telemetry, traceId }
+      );
+      return {
+        content: [{ type: "text", text: `Found ${results.length} public Vibecodr result${results.length === 1 ? "" : "s"}.` }],
+        structuredContent: {
+          query,
+          results,
+          nextAction: "Open the most relevant public post, profile, thread, or remix context before making a specific recommendation."
+        }
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return toolErrorResult("search_vibecodr failed: " + message, "SEARCH_VIBECDR_FAILED", message);
+    }
+  }
+
+  if (name === "get_remix_lineage") {
+    try {
+      const postId = optionalStringArg(args["postId"]);
+      const capsuleId = optionalStringArg(args["capsuleId"]);
+      if (!postId && !capsuleId) {
+        return toolErrorResult("postId or capsuleId is required.", "MISSING_REMIX_TARGET");
+      }
+      const lineage = await deps.vibecodr.getRemixLineage(
+        { ...(postId ? { postId } : {}), ...(capsuleId ? { capsuleId } : {}) },
+        { telemetry: deps.telemetry, traceId }
+      );
+      return {
+        content: [{ type: "text", text: `Retrieved ${lineage.remixes.length} public remix${lineage.remixes.length === 1 ? "" : "es"}.` }],
+        structuredContent: {
+          lineage,
+          nextAction: lineage.remixes.length
+            ? "Use the lineage to discuss remix/fork context without exposing source internals."
+            : "Mention that no public remixes were found yet."
+        }
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return toolErrorResult("get_remix_lineage failed: " + message, "GET_REMIX_LINEAGE_FAILED", message);
+    }
+  }
+
+  if (name === "get_thread_context") {
+    try {
+      const threadId = optionalStringArg(args["threadId"]);
+      const postId = optionalStringArg(args["postId"]);
+      if (!threadId && !postId) {
+        return toolErrorResult("threadId or postId is required.", "MISSING_THREAD_TARGET");
+      }
+      const limit = parseBoundedIntegerArg(args["limit"], 20, 50);
+      const offset = parseOffsetArg(args["offset"]);
+      const thread = await deps.vibecodr.getThreadContext(
+        { ...(threadId ? { threadId } : {}), ...(postId ? { postId } : {}), limit, offset },
+        { telemetry: deps.telemetry, traceId }
+      );
+      return {
+        content: [{ type: "text", text: `Retrieved ${thread.comments.length} public comment${thread.comments.length === 1 ? "" : "s"}.` }],
+        structuredContent: {
+          thread,
+          nextAction: thread.comments.length
+            ? "Use this public thread context to answer or summarize reactions carefully."
+            : "No public thread replies were found yet; avoid implying social proof that is not present."
+        }
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return toolErrorResult("get_thread_context failed: " + message, "GET_THREAD_CONTEXT_FAILED", message);
+    }
   }
 
   const session = sessionOverride === undefined
@@ -2647,6 +4210,16 @@ async function callToolImpl(
       details: { toolName: name }
     });
     return unauthorizedToolResult(deps.appBaseUrl);
+  }
+
+  if (name === "resume_latest_publish_flow") {
+    try {
+      const limit = parseBoundedIntegerArg(args["limit"], 10, 20);
+      return await buildResumeLatestPublishFlowResult(session, deps, traceId, limit);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return toolErrorResult("resume_latest_publish_flow failed: " + message, "RESUME_LATEST_PUBLISH_FLOW_FAILED", message);
+    }
   }
 
   if (name === "get_account_capabilities") {
@@ -2707,7 +4280,7 @@ async function callToolImpl(
       const watch = await deps.importService.watchOperation(session, operationId, {
         timeoutMs: timeoutSeconds * 1000,
         pollIntervalMs,
-        targetStatuses
+        ...(targetStatuses ? { targetStatuses } : {})
       }, { traceId, endpoint: "/mcp" });
       return {
         content: [{ type: "text", text: watch.timedOut ? "Watch timed out before target status." : "Watch reached target status." }],
@@ -2745,6 +4318,114 @@ async function callToolImpl(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return toolErrorResult("get_publish_readiness failed: " + message, "PUBLISH_READINESS_FAILED", message);
+    }
+  }
+
+  if (name === "get_runtime_readiness") {
+    try {
+      const operationId = String(args["operationId"] || "");
+      const postId = String(args["postId"] || "");
+      const draftId = String(args["draftId"] || "");
+      const capsuleId = typeof args["capsuleId"] === "string" ? args["capsuleId"] : undefined;
+      if (!operationId && !postId && !draftId && !capsuleId) {
+        return toolErrorResult(
+          "Provide operationId, postId, draftId, or capsuleId for runtime readiness. If the user does not know the id, call resume_latest_publish_flow first.",
+          "MISSING_RUNTIME_TARGET"
+        );
+      }
+
+      if (postId) {
+        const vibe = await deps.vibecodr.getLiveVibe(
+          { userId: session.userId, vibecodrToken: session.vibecodrToken },
+          postId,
+          { telemetry: deps.telemetry, traceId, userId: session.userId }
+        );
+        const evidence = [
+          "live vibe: " + vibe.title,
+          "visibility: " + vibe.visibility,
+          "player URL: " + vibe.playerUrl,
+          ...(vibe.packageSummary?.runner ? ["runner: " + vibe.packageSummary.runner] : []),
+          ...(vibe.packageSummary?.entry ? ["entry: " + vibe.packageSummary.entry] : [])
+        ];
+        return {
+          content: [{ type: "text", text: `${vibe.title} is already live and ready to share.` }],
+          structuredContent: {
+            state: "ready",
+            subject: { type: "live_vibe", id: postId },
+            nextAction: "Open or share the live vibe.",
+            evidence
+          }
+        };
+      }
+
+      const draftTargetId = draftId || (!operationId && capsuleId ? capsuleId : "");
+      if (draftTargetId && !operationId) {
+        const draft = await deps.vibecodr.getDraft(
+          { userId: session.userId, vibecodrToken: session.vibecodrToken },
+          draftTargetId,
+          { telemetry: deps.telemetry, traceId, userId: session.userId }
+        );
+        const summarizedDraft = summarizeDraft(draft);
+        if (!summarizedDraft) {
+          return toolErrorResult("Draft response could not be summarized safely.", "INVALID_DRAFT_RESPONSE");
+        }
+        const evidence = [
+          "draft: " + (summarizedDraft.title || summarizedDraft.draftId),
+          ...(summarizedDraft.status ? ["draft status: " + summarizedDraft.status] : []),
+          ...(summarizedDraft.packageSummary?.runner ? ["runner: " + summarizedDraft.packageSummary.runner] : []),
+          ...(summarizedDraft.packageSummary?.entry ? ["entry: " + summarizedDraft.packageSummary.entry] : [])
+        ];
+        return {
+          content: [{ type: "text", text: "This draft needs a publish operation before runtime readiness can be proven." }],
+          structuredContent: {
+            state: "unknown",
+            subject: { type: "draft", id: draftTargetId },
+            nextAction: "Start or resume a publish flow, then check runtime readiness with the resulting operationId.",
+            evidence
+          }
+        };
+      }
+
+      const readiness = await deps.importService.getPublishReadiness(session, operationId, capsuleId, { traceId, endpoint: "/mcp" });
+      const latest = readiness.operation.diagnostics.at(-1);
+      const failure = translateFailure(latest?.code, readiness.operation.status, latest?.details);
+      const failed = readiness.operation.status === "failed" || readiness.operation.status === "compile_failed";
+      const published = readiness.operation.status === "published" || readiness.operation.status === "published_with_warnings";
+      const state = failed
+        ? "blocked"
+        : readiness.operation.status === "published_with_warnings"
+          ? "degraded"
+          : published || readiness.readyToPublish
+            ? "ready"
+            : "unknown";
+      const nextAction = state === "ready"
+        ? published
+          ? "Open or share the live vibe."
+          : "Ask for explicit publish confirmation before making the vibe live."
+        : state === "blocked"
+          ? failure.nextActions[0] || "Repair the package or retry the guided publish flow."
+          : state === "degraded"
+            ? "Open the live vibe, then follow up on launch polish or metadata warnings."
+            : readiness.recommendedActions[0] || "Wait for the current operation to finish, then check readiness again.";
+      const evidence = [
+        "operation status: " + readiness.operation.status,
+        "current stage: " + readiness.operation.currentStage,
+        ...summarizeReadinessChecks(readiness.checks).map((check) => check.level + ": " + check.message)
+      ];
+      return {
+        content: [{ type: "text", text: state === "blocked" ? failure.userMessage : nextAction }],
+        structuredContent: {
+          state,
+          subject: { type: "operation", id: operationId },
+          operation: summarizePublicOperation(readiness.operation),
+          ...(state === "blocked" ? { blocker: failure.userMessage } : {}),
+          nextAction,
+          evidence
+        }
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return toolErrorResult("get_runtime_readiness failed: " + message, "RUNTIME_READINESS_FAILED", message);
     }
   }
 
@@ -2901,8 +4582,115 @@ async function callToolImpl(
     }
   }
 
+  if (name === "build_share_copy") {
+    try {
+      const postId = requiredStringArg(args, "postId");
+      const vibe = await deps.vibecodr.getLiveVibe(
+        { userId: session.userId, vibecodrToken: session.vibecodrToken },
+        postId,
+        { telemetry: deps.telemetry, traceId, userId: session.userId }
+      );
+      const share = buildShareCopyForVibe(vibe);
+      return {
+        content: [{ type: "text", text: "Built share copy for the live Vibecodr vibe." }],
+        structuredContent: { share }
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return toolErrorResult("build_share_copy failed: " + message, "BUILD_SHARE_COPY_FAILED", message);
+    }
+  }
+
+  if (name === "get_launch_checklist") {
+    try {
+      const postId = requiredStringArg(args, "postId");
+      const vibe = await deps.vibecodr.getLiveVibe(
+        { userId: session.userId, vibecodrToken: session.vibecodrToken },
+        postId,
+        { telemetry: deps.telemetry, traceId, userId: session.userId }
+      );
+      const checklist = buildLaunchChecklistForVibe(vibe);
+      return {
+        content: [{ type: "text", text: "Built the post-publish launch checklist." }],
+        structuredContent: {
+          postId: vibe.postId,
+          checklist,
+          nextAction: checklist.some((item) => item.status === "missing")
+            ? "Fix the missing launch polish before broad sharing."
+            : "Share the vibe and monitor engagement follow-up."
+        }
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return toolErrorResult("get_launch_checklist failed: " + message, "GET_LAUNCH_CHECKLIST_FAILED", message);
+    }
+  }
+
+  if (name === "inspect_social_preview") {
+    try {
+      const postId = requiredStringArg(args, "postId");
+      const vibe = await deps.vibecodr.getLiveVibe(
+        { userId: session.userId, vibecodrToken: session.vibecodrToken },
+        postId,
+        { telemetry: deps.telemetry, traceId, userId: session.userId }
+      );
+      const preview = buildSocialPreviewForVibe(vibe);
+      return {
+        content: [{ type: "text", text: preview.ready ? "The social preview is ready." : "The social preview needs polish." }],
+        structuredContent: { preview }
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return toolErrorResult("inspect_social_preview failed: " + message, "INSPECT_SOCIAL_PREVIEW_FAILED", message);
+    }
+  }
+
+  if (name === "suggest_post_publish_next_steps") {
+    try {
+      const postId = requiredStringArg(args, "postId");
+      const vibe = await deps.vibecodr.getLiveVibe(
+        { userId: session.userId, vibecodrToken: session.vibecodrToken },
+        postId,
+        { telemetry: deps.telemetry, traceId, userId: session.userId }
+      );
+      const suggestions = buildPostPublishNextSteps(vibe);
+      return {
+        content: [{ type: "text", text: "Suggested the next post-publish move for the live vibe." }],
+        structuredContent: {
+          postId: vibe.postId,
+          priority: suggestions.priority,
+          nextSteps: suggestions.nextSteps
+        }
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return toolErrorResult("suggest_post_publish_next_steps failed: " + message, "SUGGEST_POST_PUBLISH_NEXT_STEPS_FAILED", message);
+    }
+  }
+
+  if (name === "get_engagement_followup_context") {
+    try {
+      const postId = requiredStringArg(args, "postId");
+      const engagement = await deps.vibecodr.getVibeEngagementSummary(
+        { userId: session.userId, vibecodrToken: session.vibecodrToken },
+        postId,
+        { telemetry: deps.telemetry, traceId, userId: session.userId }
+      );
+      const followups = buildEngagementFollowups(engagement);
+      return {
+        content: [{ type: "text", text: engagement.summary }],
+        structuredContent: { engagement, followups }
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return toolErrorResult("get_engagement_followup_context failed: " + message, "GET_ENGAGEMENT_FOLLOWUP_FAILED", message);
+    }
+  }
+
   if (name === "update_live_vibe_metadata") {
     try {
+      const confirmationRequired = requireConfirmedWrite(name, "updating live vibe metadata", args);
+      if (confirmationRequired) return confirmationRequired;
       const postId = String(args["postId"] || "");
       if (!postId) {
         return toolErrorResult("postId is required.", "MISSING_POST_ID");
@@ -2930,14 +4718,15 @@ async function callToolImpl(
         );
         coverKey = upload.key;
       }
+      const metadataInput = {
+        ...(requestedVisibility ? { visibility: requestedVisibility } : {}),
+        ...(coverKey ? { coverKey } : {}),
+        ...(parseSeoArg(args["seo"]) ? { seo: parseSeoArg(args["seo"]) } : {})
+      };
       const vibe = await deps.vibecodr.updateLiveVibeMetadata(
         { userId: session.userId, vibecodrToken: session.vibecodrToken },
         postId,
-        {
-          visibility: requestedVisibility,
-          coverKey,
-          seo: parseSeoArg(args["seo"])
-        },
+        metadataInput,
         { telemetry: deps.telemetry, traceId, userId: session.userId }
       );
       return {
@@ -2968,12 +4757,7 @@ async function callToolImpl(
       const operation = await deps.importService.startImport(session, normalized, { traceId, endpoint: "/mcp" });
       return {
         content: [{ type: "text", text: "Import started. Vibecodr is preparing the draft." }],
-        structuredContent: { operation: summarizePublicOperation(operation) },
-        _meta: {
-          "openai/outputTemplate": "ui://widget/publisher-v1",
-          "openai/toolInvocation/invoking": "Importing creation",
-          "openai/toolInvocation/invoked": "Import operation updated"
-        }
+        structuredContent: { operation: summarizePublicOperation(operation) }
       };
     } catch (error) {
       if (error instanceof PackageResolutionError) {
@@ -2999,6 +4783,8 @@ async function callToolImpl(
       return { content: [{ type: "text", text: "Publish from ChatGPT is currently disabled." }], structuredContent: { enabled: false } };
     }
     try {
+      const confirmationRequired = requireConfirmedWrite(name, "publishing this creation as a live vibe", args);
+      if (confirmationRequired) return confirmationRequired;
       const sourceType = parseSourceTypeArg(args["sourceType"]);
       if (sourceType === "codex_v1" && !deps.featureFlags.enableCodexImportPath) {
         return { content: [{ type: "text", text: "Codex import path is disabled." }], structuredContent: { enabled: false, sourceType } };
@@ -3053,11 +4839,6 @@ async function callToolImpl(
           warnings: publishOutcome.warnings,
           ...(vibe ? { vibe } : {}),
           ...(share ? { share } : {})
-        },
-        _meta: {
-          "openai/outputTemplate": "ui://widget/publisher-v1",
-          "openai/toolInvocation/invoking": "Importing and publishing creation",
-          "openai/toolInvocation/invoked": "Quick publish flow completed"
         }
       };
     } catch (error) {
@@ -3073,6 +4854,8 @@ async function callToolImpl(
     if (!deps.featureFlags.enablePublishFromChatGpt) {
       return { content: [{ type: "text", text: "Publish from ChatGPT is currently disabled." }], structuredContent: { enabled: false } };
     }
+    const confirmationRequired = requireConfirmedWrite(name, "publishing this draft capsule as a live vibe", args);
+    if (confirmationRequired) return confirmationRequired;
     const operationId = String(args["operationId"] || "");
     const capsuleId = String(args["capsuleId"] || "");
     let operation;
@@ -3110,6 +4893,8 @@ async function callToolImpl(
   }
 
   if (name === "cancel_import_operation") {
+    const confirmationRequired = requireConfirmedWrite(name, "canceling this import operation", args);
+    if (confirmationRequired) return confirmationRequired;
     const operationId = String(args["operationId"] || "");
     const operation = await deps.importService.cancelImport(session, operationId, { traceId, endpoint: "/mcp" });
     return {
@@ -3126,11 +4911,8 @@ export async function callTool(
   deps: ToolDeps,
   name: string,
   args: Record<string, unknown>,
-  sessionOverride?: SessionRecord | null,
-  presentation?: ToolPresentationOptions
+  sessionOverride?: SessionRecord | null
 ): Promise<ToolResult> {
-  const result = withValidatedStructuredContent(name, await callToolImpl(req, deps, name, args, sessionOverride));
-  const widgetWrapped = WIDGET_ENABLED_TOOLS.has(name) ? withWidgetTemplateMeta(result) : result;
-  return sanitizeToolResultForPresentation(widgetWrapped, presentation);
+  return withValidatedStructuredContent(name, await callToolImpl(req, deps, name, args, sessionOverride));
 }
 

@@ -5,7 +5,12 @@ import type {
   LiveVibeSummary,
   PublishSeoInput,
   PublishVisibility,
+  RemixLineageSummary,
   RunnerType,
+  SocialCommentSummary,
+  SocialProfileSummary,
+  SocialSearchResult,
+  ThreadContextSummary,
   VibecodrQuotaSummary,
   VibeEngagementSummary,
   VibeShareSummary,
@@ -15,24 +20,24 @@ import type { Telemetry } from "../observability/telemetry.js";
 
 export type ImportGithubInput = {
   url: string;
-  branch?: string;
-  allowModuleScripts?: boolean;
-  rootHint?: string;
-  async?: boolean;
+  branch?: string | undefined;
+  allowModuleScripts?: boolean | undefined;
+  rootHint?: string | undefined;
+  async?: boolean | undefined;
 };
 
 export type ImportZipInput = {
   fileName: string;
   fileBytes: Uint8Array;
-  allowModuleScripts?: boolean;
-  rootHint?: string;
-  async?: boolean;
+  allowModuleScripts?: boolean | undefined;
+  rootHint?: string | undefined;
+  async?: boolean | undefined;
 };
 
 export type PublishDraftInput = {
-  visibility?: PublishVisibility;
-  parentCapsuleId?: string;
-  parentArtifactId?: string;
+  visibility?: PublishVisibility | undefined;
+  parentCapsuleId?: string | undefined;
+  parentArtifactId?: string | undefined;
 };
 
 export type UploadAppCoverInput = {
@@ -42,8 +47,8 @@ export type UploadAppCoverInput = {
 };
 
 export type UpdatePostMetadataInput = {
-  coverKey?: string;
-  seo?: PublishSeoInput;
+  coverKey?: string | undefined;
+  seo?: PublishSeoInput | undefined;
 };
 
 type OwnedCapsuleSummary = {
@@ -68,11 +73,11 @@ export function coverUsageForVisibility(visibility?: PublishVisibility): CoverUs
 }
 
 export type UpstreamRequestMeta = {
-  telemetry?: Telemetry;
-  traceId?: string;
-  operationId?: string;
-  sourceType?: string;
-  userId?: string;
+  telemetry?: Telemetry | undefined;
+  traceId?: string | undefined;
+  operationId?: string | undefined;
+  sourceType?: string | undefined;
+  userId?: string | undefined;
 };
 
 export class VibecodrClient {
@@ -93,7 +98,7 @@ export class VibecodrClient {
     meta?: UpstreamRequestMeta
   ): Promise<unknown> {
     const startedAt = Date.now();
-    const res = await this.httpFetch(this.apiBase + path, {
+    const requestInit: RequestInit = {
       method,
       headers: {
         authorization: "Bearer " + ctx.vibecodrToken,
@@ -101,8 +106,9 @@ export class VibecodrClient {
         ...(meta?.traceId ? { "x-trace-id": meta.traceId } : {}),
         ...(init?.headers || {})
       },
-      body: init?.body
-    });
+      ...(init?.body !== undefined ? { body: init.body } : {})
+    };
+    const res = await this.httpFetch(this.apiBase + path, requestInit);
     const text = await res.text();
     let data: unknown = {};
     try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
@@ -118,6 +124,37 @@ export class VibecodrClient {
       errorCode: res.ok ? undefined : "UPSTREAM_API_ERROR"
     });
 
+    if (!res.ok) {
+      throw Object.assign(new Error("Upstream API error " + res.status), {
+        code: "UPSTREAM_API_ERROR",
+        status: res.status,
+        path,
+        data
+      });
+    }
+    return data;
+  }
+
+  private async publicReq(method: string, path: string, meta?: UpstreamRequestMeta): Promise<unknown> {
+    const startedAt = Date.now();
+    const res = await this.httpFetch(this.apiBase + path, {
+      method,
+      headers: {
+        accept: "application/json",
+        ...(meta?.traceId ? { "x-trace-id": meta.traceId } : {})
+      }
+    });
+    const text = await res.text();
+    let data: unknown = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+    meta?.telemetry?.upstream({
+      traceId: meta.traceId,
+      endpoint: path,
+      method,
+      statusCode: res.status,
+      latencyMs: Date.now() - startedAt,
+      errorCode: res.ok ? undefined : "UPSTREAM_API_ERROR"
+    });
     if (!res.ok) {
       throw Object.assign(new Error("Upstream API error " + res.status), {
         code: "UPSTREAM_API_ERROR",
@@ -194,7 +231,7 @@ export class VibecodrClient {
     const key = typeof data["key"] === "string" ? data["key"] : "";
     if (!key) throw new Error("Missing key from app cover upload");
     const usage = typeof data["usage"] === "string" ? data["usage"] : undefined;
-    return { key, usage };
+    return { key, ...(usage ? { usage } : {}) };
   }
 
   async updatePostMetadata(
@@ -469,6 +506,105 @@ export class VibecodrClient {
     return summary;
   }
 
+  async discoverVibes(
+    input: { limit?: number; offset?: number; query?: string },
+    meta?: UpstreamRequestMeta
+  ): Promise<LiveVibeSummary[]> {
+    const params = new URLSearchParams();
+    if (typeof input.limit === "number") params.set("limit", String(input.limit));
+    if (typeof input.offset === "number") params.set("offset", String(input.offset));
+    if (input.query?.trim()) params.set("q", input.query.trim());
+    const query = params.toString();
+    const data = await this.publicReq("GET", "/feed/discover" + (query ? "?" + query : ""), meta);
+    return extractCollection(data, ["posts", "items", "feed", "vibes"])
+      .map((post) => this.toLiveVibeSummary(post))
+      .filter((post): post is LiveVibeSummary => Boolean(post));
+  }
+
+  async getPublicPost(postId: string, meta?: UpstreamRequestMeta): Promise<LiveVibeSummary> {
+    const data = await this.publicReq("GET", "/posts/" + encodeURIComponent(postId), meta) as Record<string, unknown>;
+    const summary = this.toLiveVibeSummary(data["post"] ?? data);
+    if (!summary) {
+      throw Object.assign(new Error("Public post response could not be summarized"), {
+        code: "INVALID_PUBLIC_POST_RESPONSE"
+      });
+    }
+    return summary;
+  }
+
+  async getPublicProfile(handle: string, meta?: UpstreamRequestMeta): Promise<SocialProfileSummary> {
+    let data: unknown;
+    try {
+      data = await this.publicReq("GET", "/profile/" + encodeURIComponent(handle), meta);
+    } catch {
+      data = await this.publicReq("GET", "/users/" + encodeURIComponent(handle), meta);
+    }
+    const source = readRecord(readRecord(data)["profile"] ?? readRecord(data)["user"] ?? data);
+    return this.toSocialProfileSummary(source, handle);
+  }
+
+  async searchVibecodr(
+    input: { query: string; types?: string; limit?: number; offset?: number },
+    meta?: UpstreamRequestMeta
+  ): Promise<SocialSearchResult[]> {
+    const params = new URLSearchParams({ q: input.query });
+    if (input.types?.trim()) params.set("types", input.types.trim());
+    if (typeof input.limit === "number") params.set("limit", String(input.limit));
+    if (typeof input.offset === "number") params.set("offset", String(input.offset));
+    const data = await this.publicReq("GET", "/search?" + params.toString(), meta);
+    return extractCollection(data, ["results", "items", "posts", "profiles", "tags"])
+      .map((item) => this.toSocialSearchResult(item))
+      .filter((item): item is SocialSearchResult => Boolean(item));
+  }
+
+  async getRemixLineage(
+    input: { postId?: string; capsuleId?: string },
+    meta?: UpstreamRequestMeta
+  ): Promise<RemixLineageSummary> {
+    const post = input.postId && !input.capsuleId ? await this.getPublicPost(input.postId, meta) : undefined;
+    const capsuleId = input.capsuleId || post?.capsuleId || undefined;
+    if (!capsuleId) {
+      throw Object.assign(new Error("capsuleId or postId with a capsule is required."), {
+        code: "MISSING_REMIX_CAPSULE_ID"
+      });
+    }
+    const data = await this.publicReq("GET", "/capsules/" + encodeURIComponent(capsuleId) + "/remixes", meta);
+    return {
+      capsuleId,
+      ...(input.postId ? { postId: input.postId } : {}),
+      remixes: extractCollection(data, ["remixes", "children", "nodes", "capsules"])
+        .map((item) => this.toRemixSummary(item))
+        .filter((item): item is RemixLineageSummary["remixes"][number] => Boolean(item))
+    };
+  }
+
+  async getThreadContext(
+    input: { threadId?: string; postId?: string; limit?: number; offset?: number },
+    meta?: UpstreamRequestMeta
+  ): Promise<ThreadContextSummary> {
+    const id = input.threadId || input.postId;
+    if (!id) throw new Error("threadId or postId is required.");
+    const params = new URLSearchParams();
+    if (typeof input.limit === "number") params.set("limit", String(input.limit));
+    if (typeof input.offset === "number") params.set("offset", String(input.offset));
+    const query = params.toString();
+    const path = input.threadId
+      ? "/threads/" + encodeURIComponent(input.threadId)
+      : "/posts/" + encodeURIComponent(id) + "/comments" + (query ? "?" + query : "");
+    const data = await this.publicReq("GET", path, meta);
+    const thread = readRecord(readRecord(data)["thread"] ?? data);
+    const comments = extractCollection(data, ["comments", "replies"])
+      .map((item) => this.toCommentSummary(item))
+      .filter((item): item is SocialCommentSummary => Boolean(item));
+    return {
+      ...(input.threadId ? { threadId: input.threadId } : {}),
+      ...(input.postId ? { postId: input.postId } : {}),
+      ...(readString(thread["title"]) ? { title: readString(thread["title"]) } : {}),
+      ...(input.threadId ? { url: this.webBase + "/conversations/" + encodeURIComponent(input.threadId) } : {}),
+      comments
+    };
+  }
+
   async getVibeEngagementSummary(
     ctx: VibeClientUserContext,
     postId: string,
@@ -510,7 +646,7 @@ export class VibecodrClient {
   async updateLiveVibeMetadata(
     ctx: VibeClientUserContext,
     postId: string,
-    input: UpdatePostMetadataInput & { visibility?: PublishVisibility },
+    input: UpdatePostMetadataInput & { visibility?: PublishVisibility | undefined },
     meta?: UpstreamRequestMeta
   ): Promise<LiveVibeSummary> {
     const { visibility, ...metadata } = input;
@@ -538,8 +674,8 @@ export class VibecodrClient {
   private toLiveVibeSummary(raw: unknown): LiveVibeSummary | null {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     const post = raw as Record<string, unknown>;
-    const postId = typeof post["id"] === "string" ? post["id"] : "";
-    const title = typeof post["title"] === "string" && post["title"].trim() ? post["title"] : "";
+    const postId = readString(post["id"]) || readString(post["postId"]) || "";
+    const title = readString(post["title"]) || readString(post["name"]) || "";
     if (!postId || !title) return null;
     const author = post["author"] && typeof post["author"] === "object" ? post["author"] as Record<string, unknown> : {};
     const capsule = post["capsule"] && typeof post["capsule"] === "object" ? post["capsule"] as Record<string, unknown> : {};
@@ -557,10 +693,10 @@ export class VibecodrClient {
       postUrl: this.webBase + "/post/" + encodeURIComponent(postId),
       ...(typeof capsule["id"] === "string" ? { capsuleId: capsule["id"] } : {}),
       stats: {
-        runs: toNumber(stats["runs"]),
-        likes: toNumber(stats["likes"]),
-        comments: toNumber(stats["comments"]),
-        remixes: toNumber(stats["remixes"]),
+        runs: toNumber(stats["runs"] ?? post["runsCount"] ?? post["runs_count"]),
+        likes: toNumber(stats["likes"] ?? post["likesCount"] ?? post["likes_count"]),
+        comments: toNumber(stats["comments"] ?? post["commentsCount"] ?? post["comments_count"]),
+        remixes: toNumber(stats["remixes"] ?? post["remixesCount"] ?? post["remixes_count"]),
         ...(stats["views"] !== undefined ? { views: toNumber(stats["views"]) } : {}),
         ...(stats["embedViews"] !== undefined ? { embedViews: toNumber(stats["embedViews"]) } : {})
       },
@@ -569,6 +705,75 @@ export class VibecodrClient {
         ...(typeof capsule["entry"] === "string" ? { entry: capsule["entry"] } : {}),
         ...(typeof capsule["artifactId"] === "string" || capsule["artifactId"] === null ? { artifactId: capsule["artifactId"] as string | null } : {})
       }
+    };
+  }
+
+  private toSocialProfileSummary(raw: Record<string, unknown>, fallbackHandle: string): SocialProfileSummary {
+    const handle = readString(raw["handle"]) || readString(raw["username"]) || fallbackHandle;
+    const name = readString(raw["name"]) || readString(raw["displayName"]);
+    const avatarUrl = readString(raw["avatarUrl"]) || readString(raw["imageUrl"]);
+    const bio = readString(raw["bio"]) || readString(raw["tagline"]);
+    const plan = readString(raw["plan"]);
+    const createdAt = raw["createdAt"];
+    return {
+      id: readString(raw["id"]) || readString(raw["userId"]) || handle,
+      handle,
+      ...(name ? { name } : {}),
+      ...(avatarUrl ? { avatarUrl } : {}),
+      ...(bio ? { bio } : {}),
+      ...(plan ? { plan } : {}),
+      ...(createdAt !== undefined && (typeof createdAt === "number" || typeof createdAt === "string") ? { createdAt } : {}),
+      profileUrl: this.webBase + "/profile/" + encodeURIComponent(handle)
+    };
+  }
+
+  private toSocialSearchResult(raw: unknown): SocialSearchResult | null {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const item = raw as Record<string, unknown>;
+    const type = toSearchType(item["type"] ?? item["entityType"]);
+    const id = readString(item["id"]) || readString(item["postId"]) || readString(item["userId"]) || readString(item["tag"]) || "";
+    const title = readString(item["title"]) || readString(item["name"]) || readString(item["handle"]) || readString(item["tag"]) || "";
+    if (!id || !title) return null;
+    return {
+      type,
+      id,
+      title,
+      ...(readString(item["url"]) ? { url: readString(item["url"]) } : type === "post" ? { url: this.webBase + "/post/" + encodeURIComponent(id) } : {}),
+      ...(readString(item["description"]) || readString(item["tagline"]) ? { description: readString(item["description"]) || readString(item["tagline"]) } : {}),
+      ...(readString(item["authorHandle"]) || readString(item["handle"]) ? { authorHandle: readString(item["authorHandle"]) || readString(item["handle"]) } : {})
+    };
+  }
+
+  private toCommentSummary(raw: unknown): SocialCommentSummary | null {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const comment = raw as Record<string, unknown>;
+    const id = readString(comment["id"]) || readString(comment["commentId"]) || "";
+    const body = readString(comment["body"]) || readString(comment["text"]) || "";
+    if (!id || !body) return null;
+    const author = readRecord(comment["author"] ?? comment["user"]);
+    return {
+      id,
+      body,
+      ...(readString(author["handle"]) || readString(comment["authorHandle"]) ? { authorHandle: readString(author["handle"]) || readString(comment["authorHandle"]) } : {}),
+      ...(readString(author["name"]) || readString(comment["authorName"]) ? { authorName: readString(author["name"]) || readString(comment["authorName"]) || null } : {}),
+      ...(comment["createdAt"] !== undefined && (typeof comment["createdAt"] === "number" || typeof comment["createdAt"] === "string") ? { createdAt: comment["createdAt"] } : {}),
+      ...(Object.prototype.hasOwnProperty.call(comment, "parentCommentId") ? { parentCommentId: readString(comment["parentCommentId"]) || null } : {}),
+      ...(comment["votesScore"] !== undefined || comment["score"] !== undefined ? { score: toNumber(comment["votesScore"] ?? comment["score"]) } : {})
+    };
+  }
+
+  private toRemixSummary(raw: unknown): RemixLineageSummary["remixes"][number] | null {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const item = raw as Record<string, unknown>;
+    const id = readString(item["id"]) || readString(item["capsuleId"]) || readString(item["postId"]) || "";
+    if (!id) return null;
+    return {
+      id,
+      ...(readString(item["title"]) || readString(item["name"]) ? { title: readString(item["title"]) || readString(item["name"]) } : {}),
+      ...(readString(item["postId"]) ? { postId: readString(item["postId"]) } : {}),
+      ...(readString(item["capsuleId"]) || readString(item["id"]) ? { capsuleId: readString(item["capsuleId"]) || readString(item["id"]) } : {}),
+      ...(readString(item["authorHandle"]) ? { authorHandle: readString(item["authorHandle"]) } : {}),
+      ...(item["createdAt"] !== undefined && (typeof item["createdAt"] === "number" || typeof item["createdAt"] === "string") ? { createdAt: item["createdAt"] } : {})
     };
   }
 
@@ -626,6 +831,30 @@ function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function extractCollection(raw: unknown, keys: string[]): Record<string, unknown>[] {
+  if (Array.isArray(raw)) {
+    return raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+  }
+  const obj = readRecord(raw);
+  for (const key of keys) {
+    const value = obj[key];
+    if (Array.isArray(value)) {
+      return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+    }
+  }
+  return [];
+}
+
+function toSearchType(value: unknown): SocialSearchResult["type"] {
+  if (value === "post" || value === "profile" || value === "tag" || value === "capsule" || value === "thread") return value;
+  if (value === "user") return "profile";
+  return "unknown";
 }
 
 function toNumber(value: unknown): number {

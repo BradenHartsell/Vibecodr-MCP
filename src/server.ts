@@ -99,11 +99,12 @@ const server = createServer(async (nodeReq, nodeRes) => {
       chunks.push(normalized);
     }
     const body = chunks.length ? Buffer.concat(chunks) : undefined;
-    const req = new Request(url.toString(), {
+    const requestInit: RequestInit = {
       method: nodeReq.method || "GET",
       headers: nodeReq.headers as Record<string, string>,
-      body: body && body.length > 0 ? body : undefined
-    });
+      ...(body && body.length > 0 ? { body } : {})
+    };
+    const req = new Request(url.toString(), requestInit);
     const res = await appHandler(req);
     await toNodeResponse(res, nodeRes);
   } catch (error) {

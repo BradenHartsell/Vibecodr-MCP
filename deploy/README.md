@@ -5,7 +5,6 @@
 - Containerized Node runtime
 - HTTP endpoints:
   - /health
-  - /widget
   - /mcp
   - /auth/start
   - /auth/callback

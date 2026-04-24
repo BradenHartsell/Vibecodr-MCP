@@ -32,17 +32,17 @@ type TelemetryEvent = {
   timestamp: string;
   level: LogLevel;
   category: string;
-  traceId?: string;
-  operationId?: string;
-  userHash?: string;
-  sourceType?: string;
-  stage?: string;
-  status?: string;
-  endpoint?: string;
-  latencyMs?: number;
-  retryCount?: number;
-  errorCode?: string;
-  details?: Record<string, unknown>;
+  traceId?: string | undefined;
+  operationId?: string | undefined;
+  userHash?: string | undefined;
+  sourceType?: string | undefined;
+  stage?: string | undefined;
+  status?: string | undefined;
+  endpoint?: string | undefined;
+  latencyMs?: number | undefined;
+  retryCount?: number | undefined;
+  errorCode?: string | undefined;
+  details?: Record<string, unknown> | undefined;
 };
 
 type TelemetryAlert = {
@@ -58,59 +58,59 @@ type RequestEventInput = {
   endpoint: string;
   statusCode: number;
   latencyMs: number;
-  userId?: string;
-  errorCode?: string;
+  userId?: string | undefined;
+  errorCode?: string | undefined;
 };
 
 type AuthEventInput = {
-  traceId?: string;
+  traceId?: string | undefined;
   event: string;
   outcome: "success" | "failure" | "challenge";
-  provider?: string;
-  userId?: string;
-  endpoint?: string;
-  errorCode?: string;
-  details?: Record<string, unknown>;
+  provider?: string | undefined;
+  userId?: string | undefined;
+  endpoint?: string | undefined;
+  errorCode?: string | undefined;
+  details?: Record<string, unknown> | undefined;
 };
 
 type OperationEventInput = {
-  traceId?: string;
+  traceId?: string | undefined;
   event: string;
   operationId: string;
   userId: string;
-  sourceType?: string;
-  stage?: string;
-  status?: string;
-  endpoint?: string;
-  latencyMs?: number;
-  retryCount?: number;
-  errorCode?: string;
-  details?: Record<string, unknown>;
+  sourceType?: string | undefined;
+  stage?: string | undefined;
+  status?: string | undefined;
+  endpoint?: string | undefined;
+  latencyMs?: number | undefined;
+  retryCount?: number | undefined;
+  errorCode?: string | undefined;
+  details?: Record<string, unknown> | undefined;
 };
 
 type UpstreamEventInput = {
-  traceId?: string;
-  operationId?: string;
-  userId?: string;
-  sourceType?: string;
+  traceId?: string | undefined;
+  operationId?: string | undefined;
+  userId?: string | undefined;
+  sourceType?: string | undefined;
   endpoint: string;
   method: string;
   statusCode: number;
   latencyMs: number;
-  errorCode?: string;
+  errorCode?: string | undefined;
 };
 
 type ToolEventInput = {
-  traceId?: string;
+  traceId?: string | undefined;
   toolName: string;
   outcome: "success" | "failure" | "challenge";
-  userId?: string;
-  latencyMs?: number;
-  errorCode?: string;
+  userId?: string | undefined;
+  latencyMs?: number | undefined;
+  errorCode?: string | undefined;
 };
 
 type SummaryFilter = {
-  userId?: string;
+  userId?: string | undefined;
 };
 
 const REDACTED_KEYS = new Set([
@@ -147,11 +147,13 @@ function percentile(values: number[], percentileValue: number): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * percentileValue) - 1));
-  return sorted[index];
+  return sorted[index] ?? 0;
 }
 
 function redactString(value: string): string {
   if (/^bearer\s+/i.test(value)) return "[REDACTED_BEARER_TOKEN]";
+  if (/(access_token|refresh_token|id_token|authorization|cookie|password|secret)/i.test(value)) return "[REDACTED_SENSITIVE_TEXT]";
+  if (/<\/?[a-z][\s\S]*>/i.test(value)) return "[REDACTED_UPSTREAM_BODY]";
   if (value.length > 80 && /^[A-Za-z0-9\-_\.=+/]+$/.test(value)) return "[REDACTED_TOKEN]";
   return value;
 }

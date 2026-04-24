@@ -5,7 +5,7 @@ import type { SessionRevocationStore } from "./sessionRevocationStore.js";
 type SessionPayload = {
   sid: string;
   uid: string;
-  uh?: string;
+  uh?: string | undefined;
   tok: string;
   iat: number;
   exp: number;
@@ -86,7 +86,10 @@ export class SessionStore {
     const parts = signed.split(".");
     if (parts.length !== 4) return null;
 
-    const [, ivPart, encryptedPart, tagPart] = parts;
+    const ivPart = parts[1];
+    const encryptedPart = parts[2];
+    const tagPart = parts[3];
+    if (!ivPart || !encryptedPart || !tagPart) return null;
     try {
       const iv = base64UrlDecode(ivPart);
       const encrypted = base64UrlDecode(encryptedPart);
