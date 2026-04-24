@@ -12,7 +12,7 @@ Canonical auth flow:
 
 Important:
 - `/authorize` is the MCP OAuth entrypoint for remote MCP clients
-- `/auth/start` is the browser/widget auth flow and usually returns to `/widget`
+- `/auth/start` is the browser auth flow and usually returns to `/`
 - if you are validating a coding-agent or ChatGPT MCP connection, test `/authorize`
 
 Expected session behavior:
@@ -42,7 +42,17 @@ If you want to inspect the command surface directly from CLI instead of waiting 
   - `npm run mcp:tools`
   - `node scripts/list-mcp-tools.mjs --raw`
 
-That is the same MCP tool surface the app uses. The widget adds UI, but it does not create a second hidden command set.
+That is the same MCP tool surface all remote clients use. There is no separate widget command set.
+
+Optional Code Mode dogfood URL:
+
+```text
+https://openai.vibecodr.space/mcp?codemode=search_and_execute
+```
+
+Use this only when a client is ready to work with the Cloudflare-style `search` and `execute` surface. The normal `/mcp` URL remains the compatibility path for individual product-shaped tools.
+
+The production dogfood URL should be enabled only after `CODEMODE_WORKER_LOADER` is provisioned. The gateway intentionally fails closed when Dynamic Worker execution is required but the loader binding is missing.
 
 ## Codex
 
@@ -274,7 +284,7 @@ Best current server distribution is still:
 - remote HTTP MCP server at \`https://openai.vibecodr.space/mcp\`
 
 Best current packaging boundary is:
-- keep this repo focused on the hosted MCP server, OAuth gateway, and ChatGPT app integration
+- keep this repo focused on the hosted MCP server and OAuth gateway
 - ship any public CLI installer/runtime from a separate repo under a permissive license so hosted-service use remains clearly distinct from commercial reuse of this PolyForm-licensed source tree
 
 That separate package can add real product value when it owns:

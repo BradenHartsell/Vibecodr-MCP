@@ -1,12 +1,11 @@
 import {
   buildToolWwwAuthenticate,
-  callTool,
   getSessionForToolRequest,
-  getTools,
-  toolRequiresAuth,
+  type ToolResult,
   type ToolDeps
 } from "./tools.js";
-import { getPrompt, getPrompts } from "./prompts.js";
+import { isCodeModeRequest } from "./codeMode.js";
+import { createVibecodrMcpServer } from "./server.js";
 import { jsonResponse } from "../lib/http.js";
 
 type JsonRpcId = string | number | null;
@@ -29,17 +28,21 @@ type McpHandlerOptions = {
   maxRequestBodyBytes?: number;
 };
 
-type ClientPresentationState = {
-  supportsUi: boolean;
-  expiresAt: number;
-};
+type ToolCallResult = ToolResult;
+type ToolCallOutcome = "success" | "failure" | "challenge";
 
 const DEFAULT_MAX_REQUEST_BODY_BYTES = 1_500_000;
 const LATEST_PROTOCOL_VERSION = "2025-11-25";
 const DEFAULT_FALLBACK_PROTOCOL_VERSION = LATEST_PROTOCOL_VERSION;
 const MCP_SESSION_HEADER = "mcp-session-id";
-const UI_EXTENSION_KEY = "io.modelcontextprotocol/ui";
-const CLIENT_PRESENTATION_TTL_MS = 60 * 60 * 1000;
+const REQUIRED_TOOL_SCOPES = ["openid", "profile", "email", "offline_access"];
+const MCP_SERVER_INSTRUCTIONS = [
+  "Start with Vibecodr product intent: help the user publish, inspect, polish, share, remix, and understand vibes on vibecodr.space.",
+  "For fresh publish flows, safely read get_upload_capabilities, get_guided_publish_requirements, and optionally the publish_creation_end_to_end prompt before any write; ask only for missing package, entry, visibility, cover, or SEO details.",
+  "Never make a vibe live, update live metadata, publish a draft, or cancel an operation until the user has explicitly confirmed the exact action; pass confirmed: true only after that confirmation.",
+  "Prefer product-level tools over operation internals. Use recovery tools only after a guided flow fails or the user explicitly asks for diagnostics.",
+  "In Code Mode, use search for progressive discovery, request exact capability detail before execute, and remember catalog-only entries describe planned or policy lanes but are not callable."
+].join("\n");
 const SUPPORTED_PROTOCOL_VERSIONS = new Set([
   LATEST_PROTOCOL_VERSION,
   "2025-06-18",
@@ -47,7 +50,6 @@ const SUPPORTED_PROTOCOL_VERSIONS = new Set([
   "2024-11-05",
   "2024-10-07"
 ]);
-const clientPresentationSessions = new Map<string, ClientPresentationState>();
 
 function parseContentLength(req: Request): number | undefined {
   const raw = req.headers.get("content-length");
@@ -100,6 +102,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function structuredContentRecord(result: ToolCallResult): Record<string, unknown> | undefined {
+  return isRecord(result.structuredContent) ? result.structuredContent : undefined;
+}
+
+function getToolCallOutcome(result: ToolCallResult): ToolCallOutcome {
+  if (result._meta?.["mcp/www_authenticate"]) return "challenge";
+  return typeof structuredContentRecord(result)?.["error"] === "string" ? "failure" : "success";
+}
+
+function getToolErrorCode(result: ToolCallResult): string | undefined {
+  const record = structuredContentRecord(result);
+  return typeof record?.["error"] === "string" ? record["error"] : undefined;
+}
+
 function isJsonRpcResponsePayload(payload: unknown): payload is JsonRpcResponsePayload {
   if (!isRecord(payload)) return false;
   return payload["jsonrpc"] === "2.0" && !("method" in payload) && ("result" in payload || "error" in payload);
@@ -119,62 +135,6 @@ function parseRequestParams(payload: JsonRpcRequest): Record<string, unknown> {
 function negotiatedProtocolVersion(requested?: string): string {
   if (requested && SUPPORTED_PROTOCOL_VERSIONS.has(requested)) return requested;
   return DEFAULT_FALLBACK_PROTOCOL_VERSION;
-}
-
-function pruneExpiredClientPresentationSessions(now = Date.now()): void {
-  for (const [sessionId, state] of clientPresentationSessions.entries()) {
-    if (state.expiresAt <= now) clientPresentationSessions.delete(sessionId);
-  }
-}
-
-function readUiExtensionCapability(params: Record<string, unknown>): boolean {
-  const capabilities = params["capabilities"];
-  if (!isRecord(capabilities)) return false;
-  const extensions = capabilities["extensions"];
-  if (!isRecord(extensions)) return false;
-  return isRecord(extensions[UI_EXTENSION_KEY]);
-}
-
-function requestOriginSupportsUi(req: Request): boolean {
-  for (const headerName of ["origin", "referer"]) {
-    const raw = req.headers.get(headerName);
-    if (!raw) continue;
-    try {
-      const host = new URL(raw).hostname.toLowerCase();
-      if (host === "chatgpt.com" || host.endsWith(".chatgpt.com") || host === "chat.openai.com") {
-        return true;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return false;
-}
-
-function getClientPresentationForRequest(req: Request, params?: Record<string, unknown>): ClientPresentationState {
-  pruneExpiredClientPresentationSessions();
-  const sessionId = req.headers.get(MCP_SESSION_HEADER)?.trim();
-  if (sessionId) {
-    const state = clientPresentationSessions.get(sessionId);
-    if (state) return state;
-  }
-  return {
-    supportsUi: requestOriginSupportsUi(req) || (params ? readUiExtensionCapability(params) : false),
-    expiresAt: Date.now() + CLIENT_PRESENTATION_TTL_MS
-  };
-}
-
-function storeClientPresentationForInitialize(req: Request, params: Record<string, unknown>): {
-  sessionId: string;
-  state: ClientPresentationState;
-} {
-  const sessionId = crypto.randomUUID();
-  const state = {
-    supportsUi: requestOriginSupportsUi(req) || readUiExtensionCapability(params),
-    expiresAt: Date.now() + CLIENT_PRESENTATION_TTL_MS
-  };
-  clientPresentationSessions.set(sessionId, state);
-  return { sessionId, state };
 }
 
 function validateProtocolVersionHeader(req: Request, payload: JsonRpcRequest, traceId: string): Response | undefined {
@@ -281,13 +241,11 @@ async function readJsonRpcPayload(req: Request, maxBytes: number): Promise<{ pay
 export async function handleMcpRequest(
   req: Request,
   deps: ToolDeps,
-  widgetSource: string,
-  widgetDomain: string,
-  connectDomains: string[],
   options?: McpHandlerOptions
 ): Promise<Response> {
   const traceId = req.headers.get("x-trace-id") || crypto.randomUUID();
   const requestStartedAt = Date.now();
+  const codeMode = isCodeModeRequest(req, deps.codeMode?.defaultEnabled === true);
   const maxRequestBodyBytes = Math.max(options?.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES, 64_000);
   const parsed = await readJsonRpcPayload(req, maxRequestBodyBytes);
   if (parsed.response) {
@@ -317,9 +275,6 @@ export async function handleMcpRequest(
       const singleResponse = await handleMcpRequest(
         singleRequest,
         deps,
-        widgetSource,
-        widgetDomain,
-        connectDomains,
         options
       );
       if (singleResponse.status !== 200) {
@@ -350,6 +305,7 @@ export async function handleMcpRequest(
   const id = requestPayload.id ?? null;
   const method = requestPayload.method || "";
   const params = parseRequestParams(requestPayload);
+  const mcpServer = createVibecodrMcpServer({ mode: codeMode ? "codemode" : "native", req, deps });
 
   try {
     if (method === "initialize") {
@@ -357,14 +313,11 @@ export async function handleMcpRequest(
         ? String(params["protocolVersion"])
         : undefined;
       const protocolVersion = negotiatedProtocolVersion(requestedProtocolVersion);
-      const presentation = storeClientPresentationForInitialize(req, params);
+      const sessionId = crypto.randomUUID();
       const initializeCapabilities: Record<string, unknown> = {
         tools: { listChanged: false },
         prompts: { listChanged: false }
       };
-      if (presentation.state.supportsUi) {
-        initializeCapabilities["resources"] = { listChanged: false };
-      }
       deps.telemetry.tool({
         traceId,
         toolName: "mcp.initialize",
@@ -376,10 +329,11 @@ export async function handleMcpRequest(
         id,
         result: {
           protocolVersion,
-          serverInfo: { name: "vibecodr-openai-app", version: "0.2.0" },
-          capabilities: initializeCapabilities
+          serverInfo: mcpServer.serverInfo,
+          capabilities: initializeCapabilities,
+          instructions: MCP_SERVER_INSTRUCTIONS
         }
-      }, { "x-trace-id": traceId, "cache-control": "no-store", [MCP_SESSION_HEADER]: presentation.sessionId });
+      }, { "x-trace-id": traceId, "cache-control": "no-store", [MCP_SESSION_HEADER]: sessionId });
     }
 
     if (method === "ping") {
@@ -393,16 +347,21 @@ export async function handleMcpRequest(
     }
 
     if (method === "tools/list") {
-      const presentation = getClientPresentationForRequest(req, params);
       deps.telemetry.tool({
         traceId,
-        toolName: "mcp.tools.list",
+        toolName: codeMode ? "mcp.codemode.tools.list" : "mcp.tools.list",
         outcome: "success",
         latencyMs: Date.now() - requestStartedAt
       });
       return jsonResponse(
         200,
-        { jsonrpc: "2.0", id, result: { tools: getTools({ includeOutputSchema: false, supportsUi: presentation.supportsUi }) } },
+        {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            tools: mcpServer.listTools({ includeOutputSchema: false })
+          }
+        },
         { "x-trace-id": traceId, "cache-control": "no-store" }
       );
     }
@@ -416,7 +375,7 @@ export async function handleMcpRequest(
       });
       return jsonResponse(
         200,
-        { jsonrpc: "2.0", id, result: { prompts: getPrompts() } },
+        { jsonrpc: "2.0", id, result: { prompts: mcpServer.listPrompts() } },
         { "x-trace-id": traceId, "cache-control": "no-store" }
       );
     }
@@ -427,7 +386,7 @@ export async function handleMcpRequest(
         params["arguments"] && typeof params["arguments"] === "object" && !Array.isArray(params["arguments"])
           ? (params["arguments"] as Record<string, unknown>)
           : {};
-      const prompt = getPrompt(name, args);
+      const prompt = mcpServer.getPrompt(name, args);
       if (!prompt) {
         deps.telemetry.tool({
           traceId,
@@ -460,18 +419,17 @@ export async function handleMcpRequest(
     }
 
     if (method === "tools/call") {
-      const presentation = getClientPresentationForRequest(req, params);
       const name = String(params["name"] || "");
       const args =
         params["arguments"] && typeof params["arguments"] === "object" && !Array.isArray(params["arguments"])
           ? (params["arguments"] as Record<string, unknown>)
           : {};
-      const requiredScopes = ["openid", "profile", "email", "offline_access"];
       const resourceMetadataUri = deps.appBaseUrl.replace(/\/$/, "") + "/.well-known/oauth-protected-resource/mcp";
-      const session = toolRequiresAuth(name)
+      const requiresAuth = mcpServer.toolRequiresAuth(name);
+      const session = requiresAuth
         ? await getSessionForToolRequest(req, deps, traceId)
         : null;
-      if (toolRequiresAuth(name) && !session) {
+      if (requiresAuth && !session) {
         const challengeError = req.headers.get("authorization") || req.headers.get("cookie")
           ? "invalid_token"
           : undefined;
@@ -481,7 +439,7 @@ export async function handleMcpRequest(
           outcome: "challenge",
           provider: "vibecodr",
           endpoint: "/mcp",
-          details: { toolName: name }
+          details: { toolName: codeMode ? "codemode." + name : name }
         });
         return mcpJsonRpcError(
           id,
@@ -491,7 +449,7 @@ export async function handleMcpRequest(
           401,
           {
             "www-authenticate": buildToolWwwAuthenticate(deps.appBaseUrl, {
-              scope: requiredScopes.join(" "),
+              scope: REQUIRED_TOOL_SCOPES.join(" "),
               ...(challengeError ? { error: challengeError } : {})
             }),
             "cache-control": "no-store"
@@ -500,22 +458,18 @@ export async function handleMcpRequest(
             authChallenge: {
               authorizationUri: deps.appBaseUrl.replace(/\/$/, "") + "/authorize",
               resourceMetadataUri,
-              requiredScopes,
+              requiredScopes: REQUIRED_TOOL_SCOPES,
               ...(challengeError ? { error: challengeError } : {})
             }
           }
         );
       }
-      const result = await callTool(req, deps, name, args, session, { supportsUi: presentation.supportsUi });
-      const outcome = result._meta?.["mcp/www_authenticate"] ? "challenge" : result.structuredContent && typeof result.structuredContent === "object" && !Array.isArray(result.structuredContent) && typeof (result.structuredContent as Record<string, unknown>)["error"] === "string"
-        ? "failure"
-        : "success";
-      const errorCode = outcome === "failure" && result.structuredContent && typeof result.structuredContent === "object"
-        ? String((result.structuredContent as Record<string, unknown>)["error"] || "")
-        : undefined;
+      const result = await mcpServer.callTool(req, deps, name, args, session);
+      const outcome = getToolCallOutcome(result);
+      const errorCode = outcome === "failure" ? getToolErrorCode(result) : undefined;
       deps.telemetry.tool({
         traceId,
-        toolName: name,
+        toolName: codeMode ? "codemode." + name : name,
         outcome,
         latencyMs: Date.now() - requestStartedAt,
         errorCode
@@ -524,7 +478,6 @@ export async function handleMcpRequest(
     }
 
     if (method === "resources/list") {
-      const presentation = getClientPresentationForRequest(req, params);
       deps.telemetry.tool({
         traceId,
         toolName: "mcp.resources.list",
@@ -535,82 +488,37 @@ export async function handleMcpRequest(
         jsonrpc: "2.0",
         id,
         result: {
-          resources: presentation.supportsUi
-            ? [
-                {
-                  uri: "ui://widget/publisher-v1",
-                  name: "Vibecodr.Space",
-                  mimeType: "text/html;profile=mcp-app",
-                  _meta: {
-                    ui: { uri: "ui://widget/publisher-v1", domain: widgetDomain },
-                    "openai/widgetDescription":
-                      "Vibecodr.Space is a social platform where code runs as content. This widget supports a guided publish flow: connect once, answer only the missing launch questions, and publish the generated app as a live, remixable vibe on the timeline.",
-                    "openai/widgetPrefersBorder": true,
-                    "openai/widgetDomain": widgetDomain
-                  }
-                }
-              ]
-            : []
+          resources: mcpServer.listResources()
         }
       }, { "x-trace-id": traceId, "cache-control": "no-store" });
     }
 
     if (method === "resources/read") {
-      const presentation = getClientPresentationForRequest(req, params);
-      const uri = String(params["uri"] || "");
-      if (!presentation.supportsUi || uri !== "ui://widget/publisher-v1") {
+      const uri = typeof params["uri"] === "string" ? params["uri"] : "";
+      const resource = mcpServer.readResource(uri);
+      if (resource) {
         deps.telemetry.tool({
           traceId,
           toolName: "mcp.resources.read",
-          outcome: "failure",
-          latencyMs: Date.now() - requestStartedAt,
-          errorCode: "UNKNOWN_RESOURCE_URI"
+          outcome: "success",
+          latencyMs: Date.now() - requestStartedAt
         });
-        return jsonResponse(200, {
-          jsonrpc: "2.0",
-          id,
-          error: {
-            code: -32002,
-            message: "Unknown resource URI",
-            data: { traceId, errorId: crypto.randomUUID() }
-          }
-        }, { "x-trace-id": traceId, "cache-control": "no-store" });
+        return jsonResponse(200, { jsonrpc: "2.0", id, result: resource }, { "x-trace-id": traceId, "cache-control": "no-store" });
       }
       deps.telemetry.tool({
         traceId,
         toolName: "mcp.resources.read",
-        outcome: "success",
-        latencyMs: Date.now() - requestStartedAt
+        outcome: "failure",
+        latencyMs: Date.now() - requestStartedAt,
+        errorCode: "UNKNOWN_RESOURCE_URI"
       });
       return jsonResponse(200, {
         jsonrpc: "2.0",
         id,
-        result: {
-          contents: [
-            {
-              uri: "ui://widget/publisher-v1",
-              mimeType: "text/html;profile=mcp-app",
-              text: widgetSource,
-              _meta: {
-                ui: {
-                  uri: "ui://widget/publisher-v1",
-                  domain: widgetDomain,
-                  csp: {
-                    connect_domains: connectDomains,
-                    resource_domains: [widgetDomain]
-                  }
-                },
-                "openai/widgetDescription":
-                  "Vibecodr.Space is a social platform where code runs as content. This widget supports a guided publish flow: connect once, answer only the missing launch questions, and publish the generated app as a live, remixable vibe on the timeline.",
-                "openai/widgetPrefersBorder": true,
-                "openai/widgetDomain": widgetDomain,
-                "openai/widgetCSP": {
-                  connect_domains: connectDomains,
-                  resource_domains: [widgetDomain]
-                }
-              }
-            }
-          ]
+        error: {
+          code: -32002,
+          message: "Unknown resource URI",
+          data: { traceId, errorId: crypto.randomUUID() }
         }
       }, { "x-trace-id": traceId, "cache-control": "no-store" });
     }

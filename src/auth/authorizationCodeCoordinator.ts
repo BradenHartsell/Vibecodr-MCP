@@ -43,7 +43,7 @@ type RefreshReplayResponse = {
   token_type: "Bearer";
   expires_in: number;
   scope: string;
-  refresh_token?: string;
+  refresh_token?: string | undefined;
 };
 
 type StoredCodeRecord<TRecord> = {

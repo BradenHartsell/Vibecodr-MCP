@@ -45,6 +45,14 @@ type WorkerBindings = {
   RATE_LIMIT_WINDOW_SECONDS?: string;
   RATE_LIMIT_REQUESTS_PER_WINDOW?: string;
   RATE_LIMIT_MCP_REQUESTS_PER_WINDOW?: string;
+  CODEMODE_ENABLED?: string;
+  CODEMODE_DEFAULT?: string;
+  CODEMODE_REQUIRE_DYNAMIC_WORKER?: string;
+  CODEMODE_ALLOW_NATIVE_FALLBACK?: string;
+  CODEMODE_MAX_EXECUTION_MS?: string;
+  CODEMODE_MAX_OUTPUT_BYTES?: string;
+  CODEMODE_MAX_LOG_BYTES?: string;
+  CODEMODE_MAX_NESTED_CALLS?: string;
   OAUTH_PROVIDER_NAME?: string;
   OAUTH_CLIENT_ID?: string;
   OAUTH_CLIENT_SECRET?: string;
@@ -64,6 +72,7 @@ type WorkerBindings = {
   GLOBAL_RATE_LIMITER?: CloudflareRateLimitBinding;
   MCP_RATE_LIMITER?: CloudflareRateLimitBinding;
   GATEWAY_ANALYTICS?: AnalyticsEngineDataset;
+  CODEMODE_WORKER_LOADER?: unknown;
 };
 
 class InMemoryKv implements KvNamespaceLike {
@@ -106,6 +115,14 @@ function toConfigSource(env: WorkerBindings): Record<string, string | undefined>
     RATE_LIMIT_WINDOW_SECONDS: env.RATE_LIMIT_WINDOW_SECONDS,
     RATE_LIMIT_REQUESTS_PER_WINDOW: env.RATE_LIMIT_REQUESTS_PER_WINDOW,
     RATE_LIMIT_MCP_REQUESTS_PER_WINDOW: env.RATE_LIMIT_MCP_REQUESTS_PER_WINDOW,
+    CODEMODE_ENABLED: env.CODEMODE_ENABLED,
+    CODEMODE_DEFAULT: env.CODEMODE_DEFAULT,
+    CODEMODE_REQUIRE_DYNAMIC_WORKER: env.CODEMODE_REQUIRE_DYNAMIC_WORKER,
+    CODEMODE_ALLOW_NATIVE_FALLBACK: env.CODEMODE_ALLOW_NATIVE_FALLBACK,
+    CODEMODE_MAX_EXECUTION_MS: env.CODEMODE_MAX_EXECUTION_MS,
+    CODEMODE_MAX_OUTPUT_BYTES: env.CODEMODE_MAX_OUTPUT_BYTES,
+    CODEMODE_MAX_LOG_BYTES: env.CODEMODE_MAX_LOG_BYTES,
+    CODEMODE_MAX_NESTED_CALLS: env.CODEMODE_MAX_NESTED_CALLS,
     OAUTH_PROVIDER_NAME: env.OAUTH_PROVIDER_NAME,
     OAUTH_CLIENT_ID: env.OAUTH_CLIENT_ID,
     OAUTH_CLIENT_SECRET: env.OAUTH_CLIENT_SECRET,
@@ -123,7 +140,20 @@ function toConfigSource(env: WorkerBindings): Record<string, string | undefined>
   };
 }
 
-function fingerprintConfig(config: AppConfig): string {
+const bindingIds = new WeakMap<object, number>();
+let nextBindingId = 1;
+
+function bindingFingerprint(value: unknown): string {
+  if (!value || typeof value !== "object") return "none";
+  const existing = bindingIds.get(value);
+  if (existing) return String(existing);
+  const id = nextBindingId;
+  nextBindingId += 1;
+  bindingIds.set(value, id);
+  return String(id);
+}
+
+function fingerprintConfig(config: AppConfig, env: WorkerBindings): string {
   return createHash("sha1")
     .update(
       JSON.stringify({
@@ -145,9 +175,15 @@ function fingerprintConfig(config: AppConfig): string {
           mcpRequestsPerWindow: config.rateLimitMcpRequestsPerWindow
         },
         featureFlags: {
+          allowManualTokenLink: config.allowManualTokenLink,
           enableCodexImportPath: config.enableCodexImportPath,
           enableChatGptImportPath: config.enableChatGptImportPath,
           enablePublishFromChatGpt: config.enablePublishFromChatGpt
+        },
+        codeMode: config.codeMode,
+        bindings: {
+          vibeApi: bindingFingerprint(env.VIBE_API),
+          codeModeWorkerLoader: bindingFingerprint(env.CODEMODE_WORKER_LOADER)
         }
       })
     )
@@ -162,7 +198,7 @@ let cachedTelemetry: Telemetry | null = null;
 
 function getHandler(env: WorkerBindings): AppRequestHandler {
   const config = loadConfigFromSource(toConfigSource(env));
-  const currentFingerprint = fingerprintConfig(config);
+  const currentFingerprint = fingerprintConfig(config, env);
   if (cachedHandler && cachedFingerprint === currentFingerprint && cachedSessionStore && cachedOauthStateStore) {
     return cachedHandler;
   }
@@ -183,7 +219,7 @@ function getHandler(env: WorkerBindings): AppRequestHandler {
   const operationStore = new OperationStoreKv(kv);
   const telemetry = new Telemetry({
     hashSalt: config.sessionSigningKey,
-    analytics: env.GATEWAY_ANALYTICS
+    ...(env.GATEWAY_ANALYTICS ? { analytics: env.GATEWAY_ANALYTICS } : {})
   });
   const apiFetch = env.VIBE_API ? env.VIBE_API.fetch.bind(env.VIBE_API) : fetch;
   const vibecodr = new VibecodrClient(config.vibecodrApiBase, apiFetch);
@@ -193,7 +229,7 @@ function getHandler(env: WorkerBindings): AppRequestHandler {
   cachedSessionStore = sessionStore;
   cachedOauthStateStore = oauthStateStore;
   cachedTelemetry = telemetry;
-  cachedHandler = createAppRequestHandler({
+  const runtimeDeps = {
     config,
     sessionStore,
     oauthStateStore,
@@ -203,13 +239,15 @@ function getHandler(env: WorkerBindings): AppRequestHandler {
     telemetry,
     vibecodrFetch: apiFetch,
     oauthKv: kv,
-    authorizationCodeCoordinator: env.AUTH_CODE_COORDINATOR,
     sessionRevocationStore,
+    ...(env.AUTH_CODE_COORDINATOR ? { authorizationCodeCoordinator: env.AUTH_CODE_COORDINATOR } : {}),
+    ...(env.CODEMODE_WORKER_LOADER ? { codeModeWorkerLoader: env.CODEMODE_WORKER_LOADER } : {}),
     rateLimiters: {
-      global: env.GLOBAL_RATE_LIMITER,
-      mcp: env.MCP_RATE_LIMITER
+      ...(env.GLOBAL_RATE_LIMITER ? { global: env.GLOBAL_RATE_LIMITER } : {}),
+      ...(env.MCP_RATE_LIMITER ? { mcp: env.MCP_RATE_LIMITER } : {})
     }
-  });
+  };
+  cachedHandler = createAppRequestHandler(runtimeDeps);
   return cachedHandler;
 }
 

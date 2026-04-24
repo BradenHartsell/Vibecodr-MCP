@@ -302,10 +302,7 @@ async function main() {
     assert.deepEqual(clientMetadata.json?.grant_types, ["authorization_code", "refresh_token"]);
 
     const widget = await fetch(baseUrl + "/widget");
-    const widgetHtml = await widget.text();
-    assert.ok(widgetHtml.includes("Waiting for the creation package."), "Expected compact widget to remain inert until host payload arrives");
-    assert.ok(!widgetHtml.includes('"title": "My Vibe"'), "Expected compact widget to avoid shipping a sample publish payload");
-    assert.ok(!widgetHtml.includes("Package source and raw payload"), "Expected compact widget to exclude advanced package editing UI");
+    assert.equal(widget.status, 404, "Expected removed widget route to stay unavailable");
 
     const registration = await fetchJson(baseUrl, jar, "/register", {
       method: "POST",
@@ -542,7 +539,7 @@ async function main() {
             "generic_oauth_authorize_and_token_flow",
             "gateway_refresh_token_rotation",
             "gateway_bearer_authentication",
-            "compact_widget_inertness",
+            "removed_widget_route",
             "oauth_auth_challenge",
             "logout_revokes_copied_cookie",
             "oauth_failure_alerting",

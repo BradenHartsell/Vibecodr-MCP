@@ -6,6 +6,7 @@ import {
   AuthorizationCodeStore,
   GenericOauthRequestStateStore,
   buildGatewayAuthMetadata,
+  fetchUpstreamAuthMetadata,
   handleGatewayAuthorize,
   handleGatewayToken
 } from "../src/auth/mcpOAuthCompat.js";
@@ -32,7 +33,7 @@ function createConfig(overrides: Record<string, string | undefined> = {}) {
     COOKIE_SECURE: "true",
     OAUTH_PROVIDER_NAME: "clerk",
     OAUTH_CLIENT_ID: "clerk-client-id",
-    OAUTH_ISSUER_URL: "https://clerk.vibecodr.space",
+    OAUTH_ISSUER_URL: "https://vibecodr.space/__clerk",
     OAUTH_SCOPES: "openid profile email offline_access",
     MCP_STATIC_CLIENT_ID: "vc-public-cli",
     MCP_STATIC_CLIENT_REDIRECT_URIS: "http://127.0.0.1/oauth/callback/vibecodr,http://localhost/oauth/callback/vibecodr",
@@ -43,8 +44,8 @@ function createConfig(overrides: Record<string, string | undefined> = {}) {
 async function discoveryFetch(): Promise<Response> {
   return new Response(
     JSON.stringify({
-      authorization_endpoint: "https://clerk.vibecodr.space/oauth/authorize",
-      token_endpoint: "https://clerk.vibecodr.space/oauth/token",
+      authorization_endpoint: "https://vibecodr.space/__clerk/oauth/authorize",
+      token_endpoint: "https://vibecodr.space/__clerk/oauth/token",
       code_challenge_methods_supported: ["S256"]
     }),
     {
@@ -91,6 +92,21 @@ test("loadConfigFromSource allows legacy static client ids without redirect URIs
   assert.deepEqual(config.staticMcpClient.redirectUris, []);
 });
 
+test("upstream auth discovery follows the Vibecodr Clerk proxy issuer path", async () => {
+  const config = createConfig();
+  const attempted: string[] = [];
+  const metadata = await fetchUpstreamAuthMetadata(config, async (input) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    attempted.push(url);
+    assert.equal(url, "https://vibecodr.space/__clerk/.well-known/oauth-authorization-server");
+    return discoveryFetch();
+  });
+
+  assert.deepEqual(attempted, ["https://vibecodr.space/__clerk/.well-known/oauth-authorization-server"]);
+  assert.equal(metadata.authorization_endpoint, "https://vibecodr.space/__clerk/oauth/authorize");
+  assert.equal(metadata.token_endpoint, "https://vibecodr.space/__clerk/oauth/token");
+});
+
 test("authorize accepts a preregistered public client on a loopback callback with an ephemeral port", async () => {
   const config = createConfig();
   const stateStore = new GenericOauthRequestStateStore(config.sessionSigningKey);
@@ -107,7 +123,7 @@ test("authorize accepts a preregistered public client on a loopback callback wit
   assert.equal(res.status, 302);
   const location = res.headers.get("location");
   assert.ok(location);
-  assert.match(location, /^https:\/\/clerk\.vibecodr\.space\/oauth\/authorize\?/);
+  assert.match(location, /^https:\/\/vibecodr\.space\/__clerk\/oauth\/authorize\?/);
 });
 
 test("authorize rejects a preregistered public client when the redirect path is not registered", async () => {
@@ -169,8 +185,8 @@ test("token exchange accepts a preregistered public client without a client secr
 test("gateway metadata advertises client metadata document support", async () => {
   const config = createConfig();
   const metadata = buildGatewayAuthMetadata(config, {
-    authorization_endpoint: "https://clerk.vibecodr.space/oauth/authorize",
-    token_endpoint: "https://clerk.vibecodr.space/oauth/token",
+    authorization_endpoint: "https://vibecodr.space/__clerk/oauth/authorize",
+    token_endpoint: "https://vibecodr.space/__clerk/oauth/token",
     code_challenge_methods_supported: ["S256"]
   });
   assert.equal(metadata.client_id_metadata_document_supported, true);
@@ -245,10 +261,10 @@ test("refresh exchange replays the successful response when an official client r
 
   const fakeFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://clerk.vibecodr.space/.well-known/oauth-authorization-server") {
+    if (url === "https://vibecodr.space/__clerk/.well-known/oauth-authorization-server") {
       return discoveryFetch();
     }
-    if (url === "https://clerk.vibecodr.space/oauth/token") {
+    if (url === "https://vibecodr.space/__clerk/oauth/token") {
       const body = new URLSearchParams(String(init?.body || ""));
       assert.equal(body.get("grant_type"), "refresh_token");
       assert.equal(body.get("refresh_token"), "clerk-refresh-token-1");

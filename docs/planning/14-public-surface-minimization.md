@@ -1,359 +1,149 @@
 # 14. Public Surface Minimization Plan
 
+Last updated: 2026-04-24
+
 ## Goal
 
-Reduce the public ChatGPT app surface until it behaves like a single guided publish companion instead of a lightweight operator console.
+Keep the public MCP gateway shaped like a guided publish and live-vibe companion instead of an operator console.
 
 This plan covers two related concerns:
 
-1. public widget minimization
-2. MCP tool-surface simplification
+1. The former widget surface stays removed.
+2. MCP tool discovery stays product-shaped while recovery and operator behavior stays hidden or catalog-only.
 
 The target shape is:
 
-- one obvious task: publish a vibe from the current conversation
-- one optional polish layer: visibility, thumbnail, SEO
-- one failure-only recovery layer: only shown when the flow breaks
+- one obvious publish path
+- one no-write package preparation path before writes
+- one runtime/readiness path when launch state is unclear
+- one live-vibe and social follow-up layer after publish
+- one recovery layer, callable by exact name but absent from default discovery
 
-## Why This Exists
+## Current State
 
-The current build is functional, but it still exposes too much of the underlying workflow:
+The production surface is MCP-only. The former widget file `src/web/widgetHtml.ts` has been removed, `/widget` should return 404, `resources/list` should remain empty, and tool metadata should not advertise `openai/outputTemplate`.
 
-- widget sections still reveal package editing, import mode selection, and manual recovery controls
-- the MCP catalog still advertises recovery primitives as first-class app actions
-- the model can still talk like an operator because the app surface still looks like one
-
-This conflicts with current OpenAI guidance around:
-
-- extracting a focused job instead of porting a product surface
-- optimizing for conversation instead of navigation
-- using UI selectively for clarity, not for workflow control
-
-References:
-
-- [UX Principles](https://developers.openai.com/apps-sdk/concepts/ux-principles/)
-- [UI Guidelines](https://developers.openai.com/apps-sdk/guides/ui-guidelines/)
-- [Apps SDK Reference](https://platform.openai.com/docs/apps-sdk/reference)
-
-## Current Public Surface
-
-### Widget
-
-Current public widget file:
-
-- `src/web/widgetHtml.ts`
-
-Publicly reachable sections still present in the widget:
-
-1. `One connection, then the AI carries the launch`
-2. `Publish this creation`
-3. `Package source and raw payload`
-4. `Optional finishing touches`
-5. `Live publish story`
-6. `Open live controls`
-7. `Inspection and recovery`
-
-Even when collapsed, items 3, 6, and 7 keep the surface shaped like a control panel.
-
-### Tool Surface
-
-Current public tool descriptors:
-
-- `src/mcp/tools.ts`
-
-Tools that currently read as public app verbs:
+Default `tools/list` currently exposes these product-level tools:
 
 - `get_vibecodr_platform_overview`
 - `get_guided_publish_requirements`
 - `get_upload_capabilities`
-- `list_import_operations`
-- `get_import_operation`
-- `watch_operation`
+- `prepare_publish_package`
+- `validate_creation_payload`
+- `get_launch_best_practices`
+- `get_pulse_setup_guidance`
+- `get_account_capabilities`
 - `get_publish_readiness`
-- `explain_operation_failure`
+- `get_runtime_readiness`
+- `resume_latest_publish_flow`
 - `list_vibecodr_drafts`
 - `get_vibecodr_draft`
-- `start_creation_import`
-- `compile_draft_capsule`
+- `list_my_live_vibes`
+- `get_live_vibe`
+- `get_vibe_engagement_summary`
+- `get_vibe_share_link`
+- `discover_vibes`
+- `get_public_post`
+- `get_public_profile`
+- `search_vibecodr`
+- `get_remix_lineage`
+- `get_thread_context`
+- `build_share_copy`
+- `get_launch_checklist`
+- `inspect_social_preview`
+- `suggest_post_publish_next_steps`
+- `get_engagement_followup_context`
+- `update_live_vibe_metadata`
 - `quick_publish_creation`
-- `publish_draft_capsule`
-- `cancel_import_operation`
 
-This is too broad for a first-run user-facing ChatGPT app.
+Hidden recovery handlers remain implemented and callable by exact name for compatibility, scripted diagnostics, and future Code Mode catalog execution:
 
-## Target Public Shape
-
-### Widget: Public Default
-
-The default widget should show only:
-
-1. connection state
-2. publish summary
-3. current journey state
-4. optional finishing touches
-
-The user should be able to understand:
-
-- what Vibecodr is
-- what ChatGPT is about to do
-- what is missing, if anything
-- whether the vibe is live yet
-
-The user should not need to understand:
-
-- operation ids
-- capsule ids
-- import mode defaults
-- compile versus publish orchestration
-- raw payload shape
-
-### Tool Surface: Public Default
-
-The model should be biased toward a smaller public contract:
-
-#### Primary public tools
-
-1. `get_vibecodr_platform_overview`
-- answer “what is Vibecodr?” with a canonical platform definition
-
-2. `get_guided_publish_requirements`
-- tell the model how to run the publish conversation
-
-3. `quick_publish_creation`
-- dominant first-run mutating path
-
-4. `get_publish_readiness`
-- explain whether anything still blocks launch
-
-5. `get_vibecodr_draft`
-- fetch one draft summary when the model needs a concrete state read
-
-#### Secondary public tools
-
-6. `list_vibecodr_drafts`
-- only when the user explicitly asks to browse drafts
-
-7. `start_creation_import`
-- fallback when the model intentionally wants draft-first behavior
-
-#### Recovery-only tools
-
-These should remain implemented but should not read like primary app verbs:
-
-- `watch_operation`
-- `compile_draft_capsule`
-- `publish_draft_capsule`
 - `list_import_operations`
 - `get_import_operation`
+- `watch_operation`
 - `explain_operation_failure`
+- `start_creation_import`
+- `compile_draft_capsule`
+- `publish_draft_capsule`
 - `cancel_import_operation`
 
-## Widget Minimization Plan
+## Public Tool Taxonomy
 
-### Phase 1: Remove Public Control-Panel Language
+### Platform And Guidance
 
-Replace remaining dashboard-like section semantics with product semantics.
-
-Current labels to replace or suppress:
-
-- `Package source and raw payload`
-- `Open live controls`
-- `Inspection and recovery`
-
-Target behavior:
-
-- do not mention “payload”, “operation”, or “recovery” in the first view
-- reserve those terms for explicit developer or failure contexts
-
-### Phase 2: Progressive Disclosure Rules
-
-The widget should render by state.
-
-#### Before auth
-
-Show:
-
-- why the user is connecting
-- what happens after connection
-
-Hide:
-
-- all package mutation controls
-- all status controls
-- all inspection controls
-
-#### After auth, before failure
-
-Show:
-
-- publish summary
-- launch polish
-- live publish story
-
-Hide:
-
-- raw payload editing
-- source/import controls
-- operation browsing
-- manual compile/publish buttons
-
-#### After failure
-
-Only then show:
-
-- failure explanation
-- one recovery action
-- optional advanced recovery details
-
-#### Developer mode only
-
-Developer-only controls should render only when a dedicated app flag is true, not merely because the widget HTML contains them.
-
-### Phase 3: Remove Raw JSON From the Public Flow
-
-Current public widget still contains editable package JSON.
-
-Target:
-
-- summary-first by default
-- raw JSON hidden behind a feature flag or failure-only repair path
-
-Public users should never feel like the expected path is “edit this JSON blob”.
-
-### Phase 4: Make Launch Polish Conditional
-
-`Optional finishing touches` should remain available, but only expand when:
-
-- the model asks for missing thumbnail or visibility details
-- the user asks to customize launch metadata
-
-Default quick publish should not visually depend on opening this section.
-
-## Tool-Surface Simplification Plan
-
-### Phase 1: Re-rank the Tool Catalog
-
-Keep the implementation intact, but make the public app behavior publish-first.
-
-Actions:
-
-1. strengthen `quick_publish_creation` description as the default path
-2. make `start_creation_import` explicitly secondary
-3. make recovery tools describe themselves as inspection or repair paths, not normal workflow steps
-
-### Phase 2: Add a Public vs Recovery Tool Taxonomy
-
-In the codebase, separate tools into:
-
-- public conversational tools
-- repair and inspection tools
-
-This can be done without removing the handlers by:
-
-- grouping descriptors
-- tightening descriptions
-- registering recovery tools with more explicit advanced wording
-- biasing internal model guidance away from them
-
-### Phase 3: Normalize Outputs Around User Intent
-
-All primary public tools should return:
-
-- user-oriented state labels
-- one clear next action
-- no infrastructure jargon unless explicitly requested
-
-Examples:
-
-- `I couldn't determine which file starts the app.`
-- `The draft is ready for launch.`
-- `The vibe is live and shareable now.`
-
-Not:
-
-- `compile_failed`
-- `capsuleId`
-- `watch_operation failed`
-- `Upstream API error 404`
-
-### Phase 4: Make Recovery Tools Failure-Gated
-
-Recovery tools should be invoked only when:
-
-- the primary publish path failed
-- the user explicitly asked to inspect internals
-- the model has already attempted the guided path
-
-This should be encoded in:
-
-- tool descriptions
+- `get_vibecodr_platform_overview`
 - `get_guided_publish_requirements`
-- widget copy
+- `get_upload_capabilities`
+- `get_launch_best_practices`
+- `get_pulse_setup_guidance`
+- `get_account_capabilities`
 
-## Concrete File Plan
+These tools give a zero-context model the product story, workflow contract, upload limits, launch expectations, pulse/backend boundaries, and current account capability without forcing operation internals into the first interaction.
 
-### Widget
+### Publish And Runtime
 
-Primary file:
+- `prepare_publish_package`
+- `validate_creation_payload`
+- `quick_publish_creation`
+- `get_publish_readiness`
+- `get_runtime_readiness`
+- `resume_latest_publish_flow`
+- `list_vibecodr_drafts`
+- `get_vibecodr_draft`
 
-- `src/web/widgetHtml.ts`
+The normal path is no-write preparation, explicit user confirmation, quick publish, then readiness or resume if the flow needs state. Import, compile, publish, and watch primitives stay hidden recovery unless the primary path breaks or a client calls them by exact name for compatibility.
 
-Required changes:
+### Live Vibe And Social Read
 
-1. state-gate advanced sections instead of merely collapsing them
-2. remove raw payload editor from normal public rendering
-3. only render live controls when operation state is failed or developer mode is enabled
-4. only render inspection and recovery when failure state is active
+- `list_my_live_vibes`
+- `get_live_vibe`
+- `get_vibe_engagement_summary`
+- `get_vibe_share_link`
+- `discover_vibes`
+- `get_public_post`
+- `get_public_profile`
+- `search_vibecodr`
+- `get_remix_lineage`
+- `get_thread_context`
 
-### MCP Tool Descriptors and Guidance
+These tools let agents inspect public social context and the connected user's live vibes without exposing private account data, raw source, moderation internals, or social mutations.
 
-Primary file:
+### Post-Publish Polish
 
-- `src/mcp/tools.ts`
+- `build_share_copy`
+- `get_launch_checklist`
+- `inspect_social_preview`
+- `suggest_post_publish_next_steps`
+- `get_engagement_followup_context`
+- `update_live_vibe_metadata`
 
-Required changes:
+Read-only polish helpers should produce actions and user-facing launch guidance. The metadata update tool remains confirmation-gated because it mutates a live vibe.
 
-1. tighten tool descriptions around public vs repair semantics
-2. update `get_guided_publish_requirements` to explicitly suppress repair tools during normal flows
-3. update `get_upload_capabilities` so it no longer suggests payload-level steering as a normal first-run path
-4. ensure public tool outputs stay summary-first and repair outputs stay plain-language
+## Guardrails
+
+- Keep widget routes and resources unavailable.
+- Keep recovery and operation-level handlers hidden from default `tools/list`.
+- Keep destructive native tools server-gated on `confirmed: true`.
+- Keep public outputs summary-first: state, blocker, next action, safe identifiers, and links.
+- Do not expose raw source bundles, raw manifests, telemetry rows, cookies, tokens, refresh grants, secret inventory, Cloudflare admin plumbing, or moderation internals.
+- Add visible native tools only when they are durable product primitives, not internal routes.
+- Put dense or low-level capability detail behind Code Mode `search` or hidden catalog entries.
 
 ## Acceptance Criteria
 
 This minimization work is complete when:
 
-1. a first-run user sees only:
-- connect
-- publish
-- optional polish
-- live status
+1. A first-run MCP client sees product-level guidance, no-write preparation, confirmed publish, readiness/resume, and post-publish social follow-up.
+2. A first-run client defaults to `prepare_publish_package` before package writes when payload detail needs validation and `quick_publish_creation` only after explicit user confirmation.
+3. Widget routes and UI resources stay unavailable.
+4. Recovery responses are phrased as user-facing explanations instead of raw internal status names.
+5. Default `tools/list` excludes operation repair tools while exact-name compatibility calls still work.
 
-2. a first-run ChatGPT thread defaults to:
-- `get_vibecodr_platform_overview` for platform explanation
-- `quick_publish_creation` for publish actions
-- `get_publish_readiness` for launch blockers
+## Verification
 
-3. the widget does not visually present:
-- raw JSON editing
-- operation ids
-- compile/publish/watch buttons
-- inspection lists
-
-unless the flow is in failure state or developer mode.
-
-4. failure responses are phrased as user-facing explanations instead of internal status names.
-
-5. the connector feels like:
-- one guided publish companion
-
-not:
-
-- a dashboard with hidden controls.
-
-## Implementation Order
-
-1. Widget state gating
-2. Tool descriptor re-ranking
-3. Plain-language output normalization
-4. Failure-only recovery reveal
-5. New screenshot pass for submission evidence
+- `npm run check`
+- `npm test`
+- `npm run transport:regression`
+- `npm run security:regression`
+- `npm run mcp:capability-evals`
+- `npm run mcp:measure` after any surface change

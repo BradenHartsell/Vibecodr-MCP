@@ -1,7 +1,6 @@
 import {
   jsonResponse,
   htmlResponse,
-  textResponse,
   readJson,
   inferUserIdFromToken,
   setCookieHeader,
@@ -16,7 +15,6 @@ import type { OperationStorePort } from "./storage/operationStorePort.js";
 import type { ImportService } from "./services/importService.js";
 import type { VibecodrClient } from "./vibecodr/client.js";
 import { handleMcpRequest } from "./mcp/handler.js";
-import { widgetHtml } from "./web/widgetHtml.js";
 import { oauthStartResponse, oauthCallbackResponse } from "./auth/oauth.js";
 import { buildOfficialMcpClientMetadata, OFFICIAL_MCP_CLIENT_METADATA_PATH } from "./auth/officialMcpClient.js";
 import {
@@ -36,6 +34,13 @@ import { Telemetry } from "./observability/telemetry.js";
 import type { KvNamespaceLike } from "./storage/operationStoreKv.js";
 import type { SessionRecord } from "./types.js";
 import type { AuthorizationCodeCoordinatorNamespaceLike } from "./auth/authorizationCodeCoordinator.js";
+import type { CodeModeWorkerLoaderLike } from "./mcp/codeModeRuntime.js";
+import {
+  LEGACY_SESSION_COOKIE_NAME,
+  SESSION_COOKIE_NAME,
+  readSessionCookie,
+  writeSessionCookieName
+} from "./auth/sessionCookie.js";
 
 type HttpFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type RouteHandler = (req: Request, url: URL) => Promise<Response>;
@@ -78,6 +83,7 @@ export type AppRuntimeDeps = {
   oauthKv?: KvNamespaceLike;
   authorizationCodeCoordinator?: AuthorizationCodeCoordinatorNamespaceLike;
   sessionRevocationStore?: SessionRevocationStore;
+  codeModeWorkerLoader?: CodeModeWorkerLoaderLike;
   rateLimiters?: {
     global?: CloudflareRateLimitBinding;
     mcp?: CloudflareRateLimitBinding;
@@ -95,7 +101,7 @@ function parseContentLength(req: Request): number | undefined {
 }
 
 function normalizeIpv6(ip: string): string {
-  const source = ip.split("%")[0].toLowerCase();
+  const source = (ip.split("%")[0] || ip).toLowerCase();
   const parts = source.split(":");
   const head: string[] = [];
   const tail: string[] = [];
@@ -103,6 +109,7 @@ function normalizeIpv6(ip: string): string {
 
   for (let i = 0; i < parts.length; i += 1) {
     const part = parts[i];
+    if (part === undefined) continue;
     if (part === "") {
       if (!hasCompression) {
         hasCompression = true;
@@ -240,7 +247,8 @@ function buildMcpCorsHeaders(origin: string): Record<string, string> {
   return {
     "access-control-allow-origin": origin,
     "access-control-allow-methods": "POST, GET, OPTIONS",
-    "access-control-allow-headers": "content-type, accept, authorization, mcp-protocol-version, last-event-id",
+    "access-control-allow-headers": "content-type, accept, authorization, mcp-protocol-version, mcp-session-id, last-event-id",
+    "access-control-expose-headers": "mcp-session-id",
     "access-control-max-age": "86400",
     vary: "Origin",
     "cache-control": "no-store"
@@ -278,39 +286,6 @@ function validateMcpOrigin(req: Request, config: AppConfig): { origin?: string; 
   };
 }
 
-function deriveAuthorizationServerIssuer(config: AppConfig): string | undefined {
-  if (config.oauth.issuerUrl) return trimTrailingSlash(config.oauth.issuerUrl);
-
-  const discoveryUrl = config.oauth.discoveryUrl?.trim();
-  if (discoveryUrl) {
-    try {
-      const parsed = new URL(discoveryUrl);
-      const wellKnownPaths = ["/.well-known/openid-configuration", "/.well-known/oauth-authorization-server"];
-      for (const suffix of wellKnownPaths) {
-        if (parsed.pathname.endsWith(suffix)) {
-          parsed.pathname = parsed.pathname.slice(0, -suffix.length) || "/";
-          return trimTrailingSlash(parsed.toString());
-        }
-      }
-    } catch {
-      // Ignore malformed discovery URL and fall back to explicit endpoints.
-    }
-  }
-
-  const endpointCandidates = [config.oauth.authorizationUrl, config.oauth.tokenUrl];
-  for (const candidate of endpointCandidates) {
-    if (!candidate) continue;
-    try {
-      const parsed = new URL(candidate);
-      return trimTrailingSlash(parsed.origin);
-    } catch {
-      // Ignore malformed endpoint and continue.
-    }
-  }
-
-  return undefined;
-}
-
 function buildProtectedResourceMetadata(
   config: AppConfig,
   resource: string,
@@ -345,7 +320,7 @@ async function finalizeResponse(response: Response, traceId: string): Promise<Re
     if (body && typeof body === "object" && !Array.isArray(body)) {
       const record = body as Record<string, unknown>;
       if (!Object.prototype.hasOwnProperty.call(record, "traceId")) {
-        record.traceId = traceId;
+        record["traceId"] = traceId;
       }
       return jsonResponse(response.status, record, headersToRecord(headers));
     }
@@ -370,16 +345,10 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
     oauthKv,
     authorizationCodeCoordinator,
     sessionRevocationStore: providedSessionRevocationStore,
+    codeModeWorkerLoader,
     rateLimiters
   } = deps;
 
-  const widgetSource = widgetHtml(config.appBaseUrl, config.oauth.providerName, config.allowManualTokenLink);
-  const widgetSourceAdvanced = widgetHtml(
-    config.appBaseUrl,
-    config.oauth.providerName,
-    config.allowManualTokenLink,
-    { includeAdvancedControls: true }
-  );
   const normalizedBaseUrl = trimTrailingSlash(config.appBaseUrl);
   const authorizationServerIssuers = [normalizedBaseUrl];
   const rootProtectedResourceMetadata = buildProtectedResourceMetadata(
@@ -409,13 +378,9 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
 
   async function getSession(req: Request): Promise<SessionRecord | null> {
     const cookie = req.headers.get("cookie") || "";
-    const token = cookie
-      .split(";")
-      .map((part) => part.trim())
-      .find((part) => part.startsWith("vc_session="));
-    if (!token) return null;
-    const value = decodeURIComponent(token.slice("vc_session=".length));
-    const session = sessionStore.getBySigned(value);
+    const token = readSessionCookie(cookie);
+    if (!token.value) return null;
+    const session = sessionStore.getBySigned(token.value);
     if (!session) return null;
     if (sessionRevocationStore && await sessionRevocationStore.isRevoked(session.sessionId)) {
       return null;
@@ -429,7 +394,7 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
     async () =>
       htmlResponse(
         200,
-        "<!doctype html><html><body style='font-family:sans-serif;padding:24px'><h1>Vibecodr OpenAI App</h1><ul><li><a href='/widget'>Widget</a></li><li><a href='/auth/start'>OAuth start</a></li><li><a href='/health'>Health</a></li></ul></body></html>"
+        "<!doctype html><html><body style='font-family:sans-serif;padding:24px'><h1>Vibecodr MCP Gateway</h1><ul><li><a href='/mcp'>MCP endpoint</a></li><li><a href='/auth/start'>OAuth start</a></li><li><a href='/health'>Health</a></li></ul></body></html>"
       )
   );
 
@@ -469,11 +434,6 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
   register("HEAD", /^\/\.well-known\/openid-configuration$/, async () => new Response(null, { status: 200, headers: corsHeaders() }));
   register("OPTIONS", /^\/\.well-known\/(oauth-authorization-server|openid-configuration|oauth-protected-resource|oauth-protected-resource\/mcp|oauth-client\/vibecodr-mcp\.json)$/, async () => new Response(null, { status: 204, headers: corsHeaders() }));
   register("OPTIONS", /^\/(register|token|revoke)$/, async () => new Response(null, { status: 204, headers: corsHeaders() }));
-  register("GET", /^\/widget$/, async (_req, url) =>
-    htmlResponse(200, url.searchParams.get("advanced") === "1" ? widgetSourceAdvanced : widgetSource)
-  );
-  register("HEAD", /^\/widget$/, async () => new Response(null, { status: 200 }));
-
   register("GET", /^\/auth\/start$/, async (req, url) =>
     oauthStartResponse(url, config, oauthStateStore, oauthFetch, telemetry, req.headers.get("x-trace-id") || undefined)
   );
@@ -519,6 +479,7 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
     "GET",
     /^\/(auth\/callback|oauth_callback)$/,
     async (_req, url) => {
+      const traceId = _req.headers.get("x-trace-id") || undefined;
       const genericResponse = await handleGatewayCallback(
         url,
         config,
@@ -532,10 +493,10 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
         cfg: config,
         stateStore: oauthStateStore,
         sessionStore,
-        oauthFetch,
-        vibecodrFetch,
         telemetry,
-        traceId: _req.headers.get("x-trace-id") || undefined
+        ...(traceId ? { traceId } : {}),
+        ...(oauthFetch ? { oauthFetch } : {}),
+        ...(vibecodrFetch ? { vibecodrFetch } : {})
       });
     }
   );
@@ -580,18 +541,15 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
       200,
       { ok: true, userId: issued.session.userId, expiresAt: issued.session.expiresAt, mode: "manual_override" },
       {
-        "set-cookie": setCookieHeader("vc_session", issued.signedToken, 60 * 60 * 12, { secure: config.cookieSecure })
+        "set-cookie": setCookieHeader(writeSessionCookieName(config.cookieSecure), issued.signedToken, 60 * 60 * 12, { secure: config.cookieSecure })
       }
     );
   });
 
   register("POST", /^\/api\/auth\/logout$/, async (req) => {
     const cookie = req.headers.get("cookie") || "";
-    const token = cookie
-      .split(";")
-      .map((part) => part.trim())
-      .find((part) => part.startsWith("vc_session="));
-    const signedToken = token ? decodeURIComponent(token.slice("vc_session=".length)) : undefined;
+    const token = readSessionCookie(cookie);
+    const signedToken = token.value;
     const session = signedToken ? sessionStore.getBySigned(signedToken) : null;
     if (session && sessionRevocationStore) {
       await sessionRevocationStore.revoke(session.sessionId, session.expiresAt);
@@ -604,7 +562,10 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
       userId: session?.userId,
       endpoint: "/api/auth/logout"
     });
-    return jsonResponse(200, { ok: true }, { "set-cookie": clearCookieHeader("vc_session", { secure: config.cookieSecure }) });
+    const response = jsonResponse(200, { ok: true });
+    response.headers.append("set-cookie", clearCookieHeader(SESSION_COOKIE_NAME, { secure: true }));
+    response.headers.append("set-cookie", clearCookieHeader(LEGACY_SESSION_COOKIE_NAME, { secure: config.cookieSecure }));
+    return response;
   });
 
   register("GET", /^\/api\/observability\/summary$/, async (req) => {
@@ -629,7 +590,7 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
   register("GET", /^\/api\/operations\/([^\/]+)$/, async (req, url) => {
     const session = await getSession(req);
     if (!session) return jsonResponse(401, { error: "auth required" });
-    const operationId = url.pathname.split("/")[3];
+    const operationId = url.pathname.split("/")[3] || "";
     const operation = await importService.refreshImportJobStatus(session, operationId, {
       traceId: req.headers.get("x-trace-id") || undefined,
       endpoint: url.pathname
@@ -641,7 +602,7 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
   register("POST", /^\/api\/operations\/([^\/]+)\/cancel$/, async (req, url) => {
     const session = await getSession(req);
     if (!session) return jsonResponse(401, { error: "auth required" });
-    const operationId = url.pathname.split("/")[3];
+    const operationId = url.pathname.split("/")[3] || "";
     const operation = await importService.cancelImport(session, operationId, {
       traceId: req.headers.get("x-trace-id") || undefined,
       endpoint: url.pathname
@@ -656,6 +617,7 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
         importService,
         operationStore,
         sessionStore,
+        sessionRevocationStore,
         vibecodr,
         telemetry,
         appBaseUrl: config.appBaseUrl,
@@ -665,11 +627,12 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
           enableCodexImportPath: config.enableCodexImportPath,
           enableChatGptImportPath: config.enableChatGptImportPath,
           enablePublishFromChatGpt: config.enablePublishFromChatGpt
+        },
+        codeMode: {
+          ...config.codeMode,
+          workerLoader: codeModeWorkerLoader
         }
       },
-      widgetSource,
-      config.appBaseUrl,
-      Array.from(new Set([trimTrailingSlash(config.appBaseUrl), trimTrailingSlash(config.vibecodrApiBase)])),
       { maxRequestBodyBytes: config.maxRequestBodyBytes }
     )
   );

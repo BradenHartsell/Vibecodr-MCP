@@ -2,18 +2,16 @@
 
 ## Purpose
 
-Vibecodr exposes one MCP product with two client modes:
+Vibecodr exposes one remote MCP product:
 
-- ChatGPT app mode for the guided publish-and-manage experience
-- generic MCP client mode for Codex, Cursor, VS Code, and other MCP-capable tools
+- standards-compliant Streamable HTTP MCP for Codex, Cursor, VS Code, ChatGPT, Windsurf, and other MCP-capable tools
 
-The tool surface is shared. The difference is in the client integration and auth path.
+The tool surface is goal-shaped and client-neutral. There is no embedded widget surface.
 
 ## Endpoints
 
 Base application:
 - `GET /health`
-- `GET /widget`
 - `POST /mcp`
 
 Protected resource metadata:
@@ -43,11 +41,11 @@ The gateway acts as the MCP-facing OAuth compatibility layer for generic MCP cli
 6. The MCP client redeems that gateway-issued code at `/token`.
 7. Protected MCP tool calls use the resulting bearer token.
 
-This preserves the existing ChatGPT flow while removing the need for manual token entry in generic MCP clients.
+This removes the need for manual token entry in remote MCP clients.
 
 Do not confuse the two auth entrypoints:
 - `/authorize` is the MCP OAuth entrypoint and is the correct path for Codex, Cursor, VS Code, Windsurf, and other remote MCP clients
-- `/auth/start` is the browser/widget login entrypoint used by the hosted widget flow and normally returns to `/widget`
+- `/auth/start` is the browser login entrypoint and normally returns to `/`
 
 ## Security properties
 
@@ -61,22 +59,9 @@ Do not confuse the two auth entrypoints:
 - Protected resource metadata is still emitted for the MCP resource.
 - Existing Vibecodr bearer-to-session exchange remains intact for tool execution.
 
-## ChatGPT app mode
+## Remote MCP mode
 
-ChatGPT app mode uses the shared tool surface and widget, but ChatGPT is typically configured with an explicit OAuth client during app setup.
-When `offline_access` is available, ChatGPT can refresh through the gateway without forcing the user back through the Clerk login flow.
-The gateway keeps refresh-token rotation retry-safe for a short window so native/public clients can survive duplicate startup refresh attempts without self-revoking the session.
-
-This mode is optimized for:
-- guided publishing
-- account connection
-- widget-rich tool output
-- launch polish
-- live vibe follow-up
-
-## Generic MCP mode
-
-Generic MCP mode is optimized for clients that want standards-compliant MCP over Streamable HTTP without manual token entry.
+Remote MCP mode is optimized for clients that want standards-compliant MCP over Streamable HTTP without manual token entry.
 
 Recommended setup:
 - MCP URL: `https://openai.vibecodr.space/mcp`
@@ -92,32 +77,93 @@ codex mcp add vibecodr-space --url https://openai.vibecodr.space/mcp
 
 Current public Codex docs explicitly document `codex mcp add`, `codex mcp list`, and direct `~/.codex/config.toml` editing. Treat any separate Codex login UX for protected HTTP MCPs as build-specific behavior that should be live-tested against the current Codex build.
 
+For the best user-facing workflow guide, start with [`build-with-vibecodr-mcp.md`](./build-with-vibecodr-mcp.md). This file is the protocol/reference view; the build guide is the "what should an agent or user actually do?" view.
+
 ## Tool classes
 
-Public informational tools:
+Default public tools:
 - `get_vibecodr_platform_overview`
 - `get_guided_publish_requirements`
+- `get_upload_capabilities`
+- `prepare_publish_package`
+- `validate_creation_payload`
 - `get_launch_best_practices`
 - `get_pulse_setup_guidance`
-
-Authenticated publish/manage tools:
 - `get_account_capabilities`
 - `quick_publish_creation`
 - `get_publish_readiness`
+- `get_runtime_readiness`
+- `resume_latest_publish_flow`
+- `list_vibecodr_drafts`
+- `get_vibecodr_draft`
 - `list_my_live_vibes`
 - `get_live_vibe`
 - `get_vibe_engagement_summary`
 - `get_vibe_share_link`
+- `discover_vibes`
+- `get_public_post`
+- `get_public_profile`
+- `search_vibecodr`
+- `get_remix_lineage`
+- `get_thread_context`
+- `build_share_copy`
+- `get_launch_checklist`
+- `inspect_social_preview`
+- `suggest_post_publish_next_steps`
+- `get_engagement_followup_context`
 - `update_live_vibe_metadata`
 
-Recovery tools:
+Hidden compatibility and recovery handlers:
 - `list_import_operations`
 - `get_import_operation`
 - `watch_operation`
+- `explain_operation_failure`
+- `start_creation_import`
 - `compile_draft_capsule`
 - `publish_draft_capsule`
-- `explain_operation_failure`
 - `cancel_import_operation`
+
+The hidden handlers are still implemented and can be called by exact name when an older client, regression script, or future Codemode executor needs them. They are intentionally absent from the default `tools/list` response so first-run agents see a product-shaped contract instead of operation plumbing.
+
+## Cold-start and write safety
+
+The `initialize` response includes server instructions for fresh models. Those instructions define Vibecodr product intent, recommend safe first reads for publish flows, and require explicit user confirmation before any live write.
+
+Destructive native tools now enforce `confirmed: true` server-side. This currently applies to:
+
+- `quick_publish_creation`
+- `update_live_vibe_metadata`
+- `publish_draft_capsule`
+- `cancel_import_operation`
+
+Tool descriptions are still guidance for the model, but confirmation is no longer only a descriptor convention. Calls without explicit confirmation return `CONFIRMATION_REQUIRED` before package import, metadata update, publish, or cancellation side effects begin.
+
+`get_runtime_readiness` now requires a known target rather than pretending to inspect arbitrary context. Use `operationId` during a current publish flow, `postId` for an already-live vibe, or `draftId` for a safe draft summary.
+
+## Opt-In Code Mode
+
+The native MCP surface remains the default at `/mcp`.
+
+For clients dogfooding the Cloudflare-style search/execute shape, use:
+
+```text
+https://openai.vibecodr.space/mcp?codemode=search_and_execute
+```
+
+In this mode:
+- `tools/list` returns only `search` and `execute`
+- `search` reads the server-side Vibecodr capability catalog; pass an exact `capabilityId` to receive input schema, output schema, and examples for that capability
+- `execute` calls gateway-owned capability proxies and preserves the same OAuth challenge behavior as native protected tools
+- catalog-only entries are explicitly marked as non-callable so the model can distinguish roadmap/policy lanes from executable capabilities
+- generated code is treated as discovery/execution intent, not as permission to access secrets, tokens, raw env vars, or arbitrary network calls
+
+The MCP surface is now registered through `src/mcp/server.ts`, an SDK-aligned adapter backed by `@modelcontextprotocol/sdk/server/mcp.js`. The existing gateway still owns the HTTP request parsing, OAuth challenge metadata, session resolution, body limits, telemetry, and regression-tested Streamable HTTP behavior.
+
+Production Code Mode is configured to require `CODEMODE_WORKER_LOADER` and fail closed when the Dynamic Worker loader is absent. Keep `CODEMODE_ENABLED=false` until the Cloudflare Worker Loader binding is provisioned in the target environment. Local tests can explicitly set `CODEMODE_REQUIRE_DYNAMIC_WORKER=false` to use the deterministic in-process fallback.
+
+Run `npm run mcp:measure` after surface changes. The current local measurement is 30 default native tools, 38 total native handlers with output schemas, 47 catalog entries, and 2 Code Mode tools. As of 2026-04-24, the Code Mode descriptor is 1,773 bytes, while exact capability schemas live behind `search` detail results instead of the two default tool descriptors.
+
+Run `npm run verify` for the local gateway gate. Run `npm run verify:release` against the first staged Worker before enabling production Code Mode. Set `MCP_BASE_URL` to the staged gateway URL and optionally set `MCP_BEARER_TOKEN` to cover authenticated `execute` checks.
 
 ## Prompt workflows
 
@@ -161,7 +207,7 @@ To avoid forcing ChatGPT users back through auth after the first successful link
 
 1. include `offline_access` in `OAUTH_SCOPES`
 2. let the gateway keep the upstream Clerk refresh token server-side
-3. let ChatGPT rotate only gateway-issued refresh tokens through `/token`
+3. let the MCP client rotate only gateway-issued refresh tokens through `/token`
 
 This keeps the refresh loop inside the gateway and avoids exposing provider refresh tokens to clients.
 
@@ -169,5 +215,5 @@ This keeps the refresh loop inside the gateway and avoids exposing provider refr
 
 This is one product, not two separate products.
 
-- ChatGPT app mode and generic MCP mode share tools and business logic.
-- The gateway compatibility layer exists only to make OAuth usable for clients that are stricter than ChatGPT.
+- All clients share tools and business logic.
+- The gateway compatibility layer exists to make OAuth usable for strict remote MCP clients.

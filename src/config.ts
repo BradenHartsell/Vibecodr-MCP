@@ -6,19 +6,30 @@ export type OauthConfig = {
   authorizationUrl: string;
   tokenUrl: string;
   clientId: string;
-  clientSecret?: string;
+  clientSecret?: string | undefined;
   scopes: string;
-  redirectUri?: string;
-  audience?: string;
+  redirectUri?: string | undefined;
+  audience?: string | undefined;
   providerName: string;
-  issuerUrl?: string;
-  discoveryUrl?: string;
+  issuerUrl?: string | undefined;
+  discoveryUrl?: string | undefined;
 };
 
 export type StaticMcpClientConfig = {
-  clientId?: string;
-  clientSecret?: string;
+  clientId?: string | undefined;
+  clientSecret?: string | undefined;
   redirectUris: string[];
+};
+
+export type CodeModeConfig = {
+  enabled: boolean;
+  defaultEnabled: boolean;
+  requireDynamicWorker: boolean;
+  allowNativeFallback: boolean;
+  maxExecutionMs: number;
+  maxOutputBytes: number;
+  maxLogBytes: number;
+  maxNestedCalls: number;
 };
 
 export type AppConfig = {
@@ -38,6 +49,7 @@ export type AppConfig = {
   dataDir: string;
   oauth: OauthConfig;
   staticMcpClient: StaticMcpClientConfig;
+  codeMode: CodeModeConfig;
 };
 
 function trimOrEmpty(value: string | undefined): string {
@@ -94,7 +106,7 @@ function boundedIntFromSource(
 }
 
 export function loadConfigFromSource(source: ConfigEnv): AppConfig {
-  const port = Number(source.PORT ?? "8787");
+  const port = Number(source["PORT"] ?? "8787");
   if (!Number.isFinite(port) || port <= 0) throw new Error("Invalid PORT");
 
   const sessionSigningKey = trimFromSource(source, "SESSION_SIGNING_KEY");
@@ -119,6 +131,8 @@ export function loadConfigFromSource(source: ConfigEnv): AppConfig {
   if (staticClientRedirectUris.some((value) => !isAllowedRedirectUri(value))) {
     throw new Error("MCP_STATIC_CLIENT_REDIRECT_URIS must contain only https or loopback http redirect URIs");
   }
+
+  const codeModeRequireDynamicWorker = boolFromSource(source, "CODEMODE_REQUIRE_DYNAMIC_WORKER", nodeEnv === "production");
 
   return {
     port,
@@ -151,6 +165,16 @@ export function loadConfigFromSource(source: ConfigEnv): AppConfig {
       clientId: staticClientId,
       clientSecret: staticClientSecret,
       redirectUris: staticClientRedirectUris
+    },
+    codeMode: {
+      enabled: boolFromSource(source, "CODEMODE_ENABLED", true),
+      defaultEnabled: boolFromSource(source, "CODEMODE_DEFAULT", false),
+      requireDynamicWorker: codeModeRequireDynamicWorker,
+      allowNativeFallback: boolFromSource(source, "CODEMODE_ALLOW_NATIVE_FALLBACK", !codeModeRequireDynamicWorker),
+      maxExecutionMs: boundedIntFromSource(source, "CODEMODE_MAX_EXECUTION_MS", 5_000, 500, 30_000),
+      maxOutputBytes: boundedIntFromSource(source, "CODEMODE_MAX_OUTPUT_BYTES", 32_768, 1_024, 262_144),
+      maxLogBytes: boundedIntFromSource(source, "CODEMODE_MAX_LOG_BYTES", 8_192, 512, 65_536),
+      maxNestedCalls: boundedIntFromSource(source, "CODEMODE_MAX_NESTED_CALLS", 5, 1, 20)
     }
   };
 }

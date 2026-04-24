@@ -15,14 +15,19 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "transport:regression": "npm run build && node scripts/mcp-transport-regression.mjs",
     "mcp:tools": "node scripts/list-mcp-tools.mjs",
+    "mcp:measure": "node --import tsx scripts/measure-mcp-token-surface.mjs",
+    "mcp:capability-evals": "node --import tsx scripts/capability-evals.mjs",
+    "codemode:live-sandbox": "node scripts/codemode-live-sandbox-regression.mjs",
     "validate:env": "node scripts/validate-env.mjs",
-    "package:submission": "node scripts/package-submission.mjs",
     "security:preflight": "node scripts/security-preflight.mjs",
     "security:regression": "npm run build && node scripts/security-regression.mjs",
-    "verify": "npm run check && npm test && npm run transport:regression && npm run security:regression"
+    "verify": "npm run check && npm test && npm run transport:regression && npm run security:regression && npm run mcp:capability-evals",
+    "verify:release": "npm run verify && npm run codemode:live-sandbox"
   },
   "dependencies": {
-    "zod": "^3.23.8"
+    "@cloudflare/codemode": "^0.3.4",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

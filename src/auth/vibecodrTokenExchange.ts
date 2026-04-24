@@ -36,8 +36,7 @@ export async function exchangeProviderAccessForVibecodr(
   if (!response.ok) {
     throw Object.assign(new Error("Vibecodr CLI exchange failed"), {
       code: "VIBECDR_CLI_EXCHANGE_FAILED",
-      status: response.status,
-      details: rawText.slice(0, 1200)
+      status: response.status
     });
   }
 

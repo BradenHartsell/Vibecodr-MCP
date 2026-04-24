@@ -41,7 +41,7 @@ export class OauthStateStore {
     const payload: OauthStatePayload = {
       nonce: randomUUID(),
       cv: codeVerifier,
-      rt: returnTo || "/widget",
+      rt: returnTo || "/",
       iat: now,
       exp: now + this.ttlMs
     };

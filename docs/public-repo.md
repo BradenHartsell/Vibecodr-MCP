@@ -1,10 +1,9 @@
 # Public Repo Guide
 
-This repository is the public-facing source for the Vibecodr OpenAI gateway:
+This repository is the public-facing source for the Vibecodr MCP gateway:
 
 - the MCP server at `/mcp`
-- the ChatGPT app widget at `/widget`
-- the gateway OAuth compatibility layer for ChatGPT and generic MCP clients
+- the gateway OAuth compatibility layer for remote MCP clients
 - the Vibecodr publish/import orchestration that talks to the private Vibecodr API
 
 It is intentionally **not** the full Vibecodr product monorepo.
@@ -12,11 +11,9 @@ It is intentionally **not** the full Vibecodr product monorepo.
 ## What this repo contains
 
 - MCP transport, tool descriptors, and tool handlers
-- ChatGPT widget HTML and Apps SDK metadata
 - OAuth gateway integration with Clerk
 - import/compile/publish orchestration logic
 - Cloudflare Worker deployment config templates
-- submission and review artifacts for the ChatGPT app
 
 ## What this repo does not contain
 
@@ -36,7 +33,7 @@ The following categories are intentionally kept out of the public repository via
 - local secret bundles such as `deploy/cloudflare/secrets.local.env`
 - internal agent directories such as `.agent/` and `.agents/`
 - local build artifacts (`dist/`, `data/`, `.wrangler/`, `coverage/`)
-- local screenshots under `submission/screenshots/` except `.gitkeep`
+- local screenshots, review evidence, and staged release artifacts
 
 Use the committed templates instead:
 
@@ -62,7 +59,7 @@ If you need commercial rights, production embedding beyond the license, or anoth
 
 ## Public CLI boundary
 
-If Vibecodr ships a public CLI installer and runtime for the hosted MCP service, that package should live in a separate repo with its own permissive license. This repo remains the source-available hosted server and ChatGPT app gateway. Keeping those surfaces separate avoids implying that commercial use of the hosted service is restricted just because this implementation repo is PolyForm-licensed.
+If Vibecodr ships a public CLI installer and runtime for the hosted MCP service, that package should live in a separate repo with its own permissive license. This repo remains the source-available hosted MCP server and OAuth gateway. Keeping those surfaces separate avoids implying that commercial use of the hosted service is restricted just because this implementation repo is PolyForm-licensed.
 
 ## How to read the docs
 
@@ -70,7 +67,6 @@ Start here:
 
 - [`../README.md`](../README.md)
 - [`mcp-server.md`](./mcp-server.md)
-- [`openai-app.md`](./openai-app.md)
 - [`mcp-client-setup.md`](./mcp-client-setup.md)
 - [`../deploy/cloudflare/README.md`](../deploy/cloudflare/README.md)
 
@@ -82,7 +78,6 @@ For deeper design context:
 
 This repo is intended to give a real, working glimpse into how Vibecodr exposes:
 
-- a ChatGPT app
 - a standards-oriented MCP server
 - an OAuth bridge that keeps user identity in Clerk while preserving Vibecodr account-linked publishing
 

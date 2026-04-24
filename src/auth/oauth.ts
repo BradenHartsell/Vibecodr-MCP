@@ -5,6 +5,7 @@ import { OauthStateStore } from "./oauthStateStore.js";
 import { SessionStore } from "./sessionStore.js";
 import type { Telemetry } from "../observability/telemetry.js";
 import { exchangeProviderAccessForVibecodr } from "./vibecodrTokenExchange.js";
+import { writeSessionCookieName } from "./sessionCookie.js";
 
 type HttpFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -43,7 +44,7 @@ function trimSlash(value: string): string {
 }
 
 function sanitizeReturnTo(value: string | null): string {
-  const fallback = "/widget";
+  const fallback = "/";
   if (!value) return fallback;
   if (!value.startsWith("/") || value.startsWith("//")) return fallback;
   if (/\r|\n/.test(value)) return fallback;
@@ -90,8 +91,8 @@ async function resolveOAuthEndpoints(cfg: AppConfig, httpFetch: HttpFetch = fetc
         continue;
       }
       const data = (await res.json()) as Record<string, unknown>;
-      const authorizationUrl = typeof data.authorization_endpoint === "string" ? data.authorization_endpoint : "";
-      const tokenUrl = typeof data.token_endpoint === "string" ? data.token_endpoint : "";
+      const authorizationUrl = typeof data["authorization_endpoint"] === "string" ? data["authorization_endpoint"] : "";
+      const tokenUrl = typeof data["token_endpoint"] === "string" ? data["token_endpoint"] : "";
       if (!authorizationUrl || !tokenUrl) {
         lastError = "Discovery payload missing authorization_endpoint/token_endpoint at " + discoveryUrl;
         continue;
@@ -214,7 +215,7 @@ export async function oauthCallbackResponse(args: {
     });
     return new Response(null, {
       status: 302,
-      headers: { location: "/widget?auth_error=" + encodeURIComponent(error + ":" + desc) }
+      headers: { location: "/?auth_error=" + encodeURIComponent(error + ":" + desc) }
     });
   }
 
@@ -283,7 +284,7 @@ export async function oauthCallbackResponse(args: {
   });
 
   if (!tokenRes.ok) {
-    const text = await tokenRes.text();
+    await tokenRes.text();
     telemetry?.auth({
       traceId,
       event: "oauth_token_exchange",
@@ -296,7 +297,7 @@ export async function oauthCallbackResponse(args: {
     return jsonResponse(502, {
       error: "OAuth token exchange failed",
       status: tokenRes.status,
-      details: text.slice(0, 1200)
+      details: "The OAuth provider returned a non-success token response."
     });
   }
 
@@ -373,8 +374,8 @@ export async function oauthCallbackResponse(args: {
   return new Response(null, {
     status: 302,
     headers: {
-      location: rec.returnTo || "/widget",
-      "set-cookie": setCookieHeader("vc_session", signedToken, ttlSec, { secure: cfg.cookieSecure })
+      location: rec.returnTo || "/",
+      "set-cookie": setCookieHeader(writeSessionCookieName(cfg.cookieSecure), signedToken, ttlSec, { secure: cfg.cookieSecure })
     }
   });
 }

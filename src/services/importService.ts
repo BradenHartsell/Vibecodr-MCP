@@ -20,8 +20,8 @@ import type {
 } from "../types.js";
 
 type ServiceRequestMeta = {
-  traceId?: string;
-  endpoint?: string;
+  traceId?: string | undefined;
+  endpoint?: string | undefined;
 };
 
 const TERMINAL_STATUSES: OperationStatus[] = [
@@ -550,17 +550,19 @@ export class ImportService {
     if (op.status === "failed" || op.status === "canceled") {
       const latest = op.diagnostics.at(-1);
       const translation = translateFailure(latest?.code, op.status, latest?.details);
-      steps[steps.length - 1].message = translation.diagnosticMessage;
+      const importStep = steps[steps.length - 1];
+      if (importStep) importStep.message = translation.diagnosticMessage;
       recommendedActions.push(...translateFailure(latest?.code, op.status, latest?.details).nextActions);
       return { operation: op, published: false, timedOut: false, steps, recommendedActions };
     }
 
     if (op.status !== "draft_ready") {
-      const watch = await this.watchOperation(session, op.operationId, {
-        timeoutMs: options?.timeoutMs,
-        pollIntervalMs: options?.pollIntervalMs,
-        targetStatuses: ["draft_ready", "failed", "canceled"]
-      }, meta);
+      const watchOptions = {
+        ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+        ...(options?.pollIntervalMs !== undefined ? { pollIntervalMs: options.pollIntervalMs } : {}),
+        targetStatuses: ["draft_ready", "failed", "canceled"] satisfies OperationStatus[]
+      };
+      const watch = await this.watchOperation(session, op.operationId, watchOptions, meta);
       op = watch.operation;
 
       if (watch.timedOut) {
@@ -776,8 +778,8 @@ export class ImportService {
       const requestedCoverKey = trimToUndefined(options?.coverKey);
       const requestedSeo = trimSeoFields(options?.seo);
       const thumbnailInput = {
-        thumbnailFile: options?.thumbnailFile,
-        thumbnailUpload: options?.thumbnailUpload
+        ...(options?.thumbnailFile ? { thumbnailFile: options.thumbnailFile } : {}),
+        ...(options?.thumbnailUpload ? { thumbnailUpload: options.thumbnailUpload } : {})
       };
       const shouldApplyMetadata = Boolean(
         requestedCoverKey || requestedSeo || thumbnailInput.thumbnailFile || thumbnailInput.thumbnailUpload

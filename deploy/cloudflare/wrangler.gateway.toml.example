@@ -1,14 +1,24 @@
 name = "vibecodr-openai-gateway"
 main = "../../src/worker.ts"
-compatibility_date = "2026-03-05"
+compatibility_date = "2026-04-23"
 compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[observability.logs]
+head_sampling_rate = 1
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 0.05
 
 [vars]
 APP_BASE_URL = "https://openai.vibecodr.space"
 VIBECDR_API_BASE = "https://api.vibecodr.space"
 OAUTH_PROVIDER_NAME = "clerk"
 OAUTH_CLIENT_ID = "replace_me"
-OAUTH_ISSUER_URL = "https://clerk.vibecodr.space"
+OAUTH_ISSUER_URL = "https://vibecodr.space/__clerk"
 OAUTH_SCOPES = "openid profile email offline_access"
 COOKIE_SECURE = "true"
 ALLOW_MANUAL_TOKEN_LINK = "false"
@@ -17,6 +27,14 @@ MAX_REQUEST_BODY_BYTES = "8500000"
 RATE_LIMIT_WINDOW_SECONDS = "60"
 RATE_LIMIT_REQUESTS_PER_WINDOW = "240"
 RATE_LIMIT_MCP_REQUESTS_PER_WINDOW = "120"
+CODEMODE_ENABLED = "false"
+CODEMODE_DEFAULT = "false"
+CODEMODE_REQUIRE_DYNAMIC_WORKER = "true"
+CODEMODE_ALLOW_NATIVE_FALLBACK = "false"
+CODEMODE_MAX_EXECUTION_MS = "5000"
+CODEMODE_MAX_OUTPUT_BYTES = "32768"
+CODEMODE_MAX_LOG_BYTES = "8192"
+CODEMODE_MAX_NESTED_CALLS = "5"
 # Optional preregistered MCP client for an official public CLI.
 # Use https URLs or loopback http URLs; loopback redirect matching ignores only the port.
 # MCP_STATIC_CLIENT_ID = "replace_me"
@@ -35,6 +53,12 @@ class_name = "AuthorizationCodeCoordinator"
 [[services]]
 binding = "VIBE_API"
 service = "vibecodr-api"
+
+# Code Mode Dynamic Worker Loader.
+# Keep CODEMODE_ENABLED disabled until this binding is live in the target account.
+# When enabled, this loader is only for MCP Code Mode search/execute.
+# [[worker_loaders]]
+# binding = "CODEMODE_WORKER_LOADER"
 
 [[ratelimits]]
 name = "GLOBAL_RATE_LIMITER"

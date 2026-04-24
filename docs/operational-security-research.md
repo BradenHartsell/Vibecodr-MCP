@@ -1,19 +1,16 @@
 # Operational Security Research And Configuration Runbook
 
-This runbook consolidates what is needed to make the Vibecodr OpenAI app secure and operational with a dedicated gateway service.
+This runbook consolidates what is needed to make the Vibecodr MCP gateway secure and operational with a dedicated gateway service.
 
-## 1. OpenAI Apps requirements (production)
+## 1. Remote MCP requirements (production)
 
 ### MCP endpoint and hosting
-- MCP server must be publicly reachable over HTTPS for ChatGPT app connectivity.
-- Localhost is acceptable for local testing only, not production submission.
+- MCP server must be publicly reachable over HTTPS for remote MCP clients.
+- Localhost is acceptable for local testing only, not production use.
 
-### Tools and widget metadata
+### Tools and metadata
 - Tool descriptors should include proper security schemes and auth challenge behavior.
-- Widget resources should include explicit domain/CSP metadata and avoid broad domain wildcards.
-
-### Submission readiness
-- Public app submission requires production endpoint readiness plus policy/support artifacts.
+- The server does not expose widget resources or Apps SDK UI metadata.
 
 ## 2. Cloudflare deployment requirements (secure baseline)
 
@@ -23,7 +20,7 @@ This runbook consolidates what is needed to make the Vibecodr OpenAI app secure 
 
 ### Routing and domain
 - Use Custom Domain or Routes for production, not `workers.dev` as primary business endpoint.
-- Prefer a dedicated gateway domain for the OpenAI app endpoint.
+- Prefer a dedicated gateway domain for the MCP endpoint.
 
 ### Internal service communication
 - Use Service Bindings for Worker-to-Worker communication to avoid public internal API exposure.
@@ -40,7 +37,7 @@ This runbook consolidates what is needed to make the Vibecodr OpenAI app secure 
 
 ### Scopes
 - Keep `openid profile email` baseline.
-- Include `offline_access` when ChatGPT or another MCP client should stay authorized without sending the user back through the login flow.
+- Include `offline_access` when an MCP client should stay authorized without sending the user back through the login flow.
 
 ## 4. Security controls implemented in this repo
 
@@ -71,11 +68,6 @@ This runbook consolidates what is needed to make the Vibecodr OpenAI app secure 
 
 ## Sources
 
-- OpenAI Apps SDK docs:
-  - https://developers.openai.com/apps-sdk/deploy
-  - https://developers.openai.com/apps-sdk/deploy/submission
-  - https://developers.openai.com/apps-sdk/build/mcp-server
-  - https://developers.openai.com/apps-sdk/reference
 - Cloudflare docs:
   - https://developers.cloudflare.com/workers/development-testing/environment-variables/
   - https://developers.cloudflare.com/workers/wrangler/configuration/

@@ -1,26 +1,26 @@
-# Vibecodr Upload App: Planning Document Set
+# Archived Planning Notes
 
-This folder contains the end-to-end implementation plan for a new application that lets users upload vibecoded creations from:
+This folder contains historical planning notes from the original upload app and ChatGPT widget exploration. Those notes are useful design context, but they are not the current production contract.
 
-- Codex app workflows
-- chatgpt.com workflows via ChatGPT App and widget
+The current production surface is the hosted Vibecodr MCP gateway:
 
-This plan is grounded in:
+- no embedded widget surface
+- no OpenAI app submission packet
+- no `resources/list` UI resources
+- public MCP tools shaped around publishing, reading, polish, sharing, remixing, and recovery
+- hidden recovery handlers callable by exact name for compatibility
+- Code Mode staged behind Cloudflare Dynamic Worker configuration
 
-- Existing Vibecodr platform APIs and auth patterns from the main Vibecodr codebase
-- Current OpenAI Apps SDK build, deploy, and submission guidance:
-  - [Build MCP Server](https://developers.openai.com/apps-sdk/build/mcp-server/)
-  - [Build ChatGPT UI](https://developers.openai.com/apps-sdk/build/chatgpt-ui/)
-  - [Examples](https://developers.openai.com/apps-sdk/build/examples/)
-  - [Plan Tools](https://developers.openai.com/apps-sdk/plan/tools/)
-  - [Reference](https://developers.openai.com/apps-sdk/reference/)
-  - [Quickstart](https://developers.openai.com/apps-sdk/quickstart/)
-  - [Deploy](https://developers.openai.com/apps-sdk/deploy/)
-  - [Connect from ChatGPT](https://developers.openai.com/apps-sdk/deploy/connect-from-chatgpt/)
-  - [Submission](https://developers.openai.com/apps-sdk/deploy/submission/)
-  - [App Submission Guidelines](https://developers.openai.com/apps-sdk/app-submission-guidelines/)
+Use these current documents as the source of truth:
 
-## Document Index
+- [MCP server behavior](../mcp-server.md)
+- [MCP client setup](../mcp-client-setup.md)
+- [Cloudflare MCP alignment](../cloudflare-mcp-alignment.md)
+- [Code Mode migration plan](../cloudflare-codemode-migration-plan.md)
+- [Dynamic Worker sandbox configuration](../dynamic-worker-sandbox-configuration.md)
+- [Public surface minimization](14-public-surface-minimization.md)
+
+## Historical Index
 
 1. [01-overview](01-overview.md)
 2. [02-architecture-and-data-flow](02-architecture-and-data-flow.md)
@@ -37,7 +37,7 @@ This plan is grounded in:
 13. [13-system-wiring-matrix](13-system-wiring-matrix.md)
 14. [14-public-surface-minimization](14-public-surface-minimization.md)
 
-## Templates
+## Historical Templates
 
 - [OpenAI Submission Payload Template](templates/openai-submission-payload.template.json)
 - [Tool Catalog Template](templates/tool-catalog.template.yaml)
