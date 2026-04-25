@@ -58,10 +58,10 @@ machine OAuth endpoints.
 ## Build and run locally with Docker
 
 1. Build image:
-- docker build -t vibecodr-openai-app:local .
+- docker build -t vibecodr-mcp-gateway:local .
 
 2. Run container:
-- docker run --rm -p 8787:8787 --env-file .env vibecodr-openai-app:local
+- docker run --rm -p 8787:8787 --env-file .env vibecodr-mcp-gateway:local
 
 3. Verify:
 - curl http://localhost:8787/health

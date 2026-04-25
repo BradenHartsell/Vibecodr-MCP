@@ -11,9 +11,12 @@ The current production surface is the hosted Vibecodr MCP gateway:
 - hidden recovery handlers callable by exact name for compatibility
 - Code Mode staged behind Cloudflare Dynamic Worker configuration
 
+The current architecture is one hosted gateway/server with many MCP clients, including ChatGPT and Codex. The first-party CLI is a separate client repo. There is no separate OpenAI app server unless a future widget/UI resource is deliberately reintroduced.
+
 Use these current documents as the source of truth:
 
 - [MCP server behavior](../mcp-server.md)
+- [Canonical architecture](../canonical-architecture.md)
 - [MCP client setup](../mcp-client-setup.md)
 - [Cloudflare MCP alignment](../cloudflare-mcp-alignment.md)
 - [Code Mode migration plan](../cloudflare-codemode-migration-plan.md)

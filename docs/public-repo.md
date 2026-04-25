@@ -5,6 +5,7 @@ This repository is the public-facing source for the Vibecodr MCP gateway:
 - the MCP server at `/mcp`
 - the gateway OAuth compatibility layer for remote MCP clients
 - the Vibecodr publish/import orchestration that talks to the private Vibecodr API
+- the single hosted server implementation used by all remote MCP clients
 
 It is intentionally **not** the full Vibecodr product monorepo.
 
@@ -60,6 +61,8 @@ If you need commercial rights, production embedding beyond the license, or anoth
 ## Public CLI boundary
 
 If Vibecodr ships a public CLI installer and runtime for the hosted MCP service, that package should live in a separate repo with its own permissive license. This repo remains the source-available hosted MCP server and OAuth gateway. Keeping those surfaces separate avoids implying that commercial use of the hosted service is restricted just because this implementation repo is PolyForm-licensed.
+
+The separate CLI is a client of this gateway. It should not be documented as a second server or as a legacy ChatGPT-specific app surface.
 
 ## How to read the docs
 

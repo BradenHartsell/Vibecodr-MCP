@@ -1,4 +1,4 @@
-# Clerk OAuth Setup For Vibecodr OpenAI App
+# Clerk OAuth Setup For Vibecodr MCP Gateway
 
 This document captures the exact information needed to complete real account linking so imported creations publish to the authenticated Vibecodr user.
 

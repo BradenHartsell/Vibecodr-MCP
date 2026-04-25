@@ -20,7 +20,7 @@ import type { SessionRecord } from "../types.js";
 export type McpServerMode = "native" | "codemode";
 
 export const VIBECDR_MCP_SERVER_INFO = {
-  name: "vibecodr-openai-app",
+  name: "vibecodr-mcp-gateway",
   version: "0.2.0"
 } as const;
 

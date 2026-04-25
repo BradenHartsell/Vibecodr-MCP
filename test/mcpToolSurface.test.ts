@@ -236,7 +236,7 @@ test("SDK adapter mirrors native tool, prompt, and resource contracts", () => {
   const adapter = createVibecodrMcpServer({ mode: "native" });
 
   assert.equal(adapter.mode, "native");
-  assert.equal(adapter.serverInfo.name, "vibecodr-openai-app");
+  assert.equal(adapter.serverInfo.name, "vibecodr-mcp-gateway");
   assert.equal(adapter.serverInfo.version, "0.2.0");
   assert.equal(typeof adapter.sdkServer.connect, "function");
 

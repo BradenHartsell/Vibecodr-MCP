@@ -1,10 +1,11 @@
 # Vibecodr.Space MCP Gateway
 
-Production-grade remote MCP server and ingestion service for importing vibecoded creations from Codex, ChatGPT, and other MCP clients into Vibecodr.
+Production-grade remote MCP server and ingestion service for importing vibecoded creations from Codex, ChatGPT, Cursor, VS Code, Windsurf, and other MCP clients into Vibecodr.
 
 ## Documentation
 
 - [docs/mcp-server.md](docs/mcp-server.md)
+- [docs/canonical-architecture.md](docs/canonical-architecture.md)
 - [docs/build-with-vibecodr-mcp.md](docs/build-with-vibecodr-mcp.md)
 - [docs/mcp-client-setup.md](docs/mcp-client-setup.md)
 - [docs/mcp-tool-surface-execution-plan.md](docs/mcp-tool-surface-execution-plan.md)
@@ -17,6 +18,8 @@ Production-grade remote MCP server and ingestion service for importing vibecoded
 ## Repo scope
 
 This repository is the public-facing gateway for the Vibecodr MCP server.
+
+It is the single hosted MCP server for Vibecodr. ChatGPT, Codex, Cursor, VS Code, Windsurf, and the first-party CLI are clients of this server; there is no separate OpenAI app server in the active production design.
 
 It contains:
 
@@ -42,7 +45,7 @@ See [docs/public-repo.md](docs/public-repo.md) for the public-repo boundary and 
 
 ## What is implemented
 
-- MCP endpoint at `/mcp` with Apps-compatible tool catalog
+- MCP endpoint at `/mcp` with a client-neutral tool catalog
 - Cloudflare Worker runtime entrypoint at `src/worker.ts`
 - OAuth account linking flow:
   - `/auth/start`
@@ -86,7 +89,7 @@ Cloudflare local worker:
 
 ## MCP client compatibility
 
-The gateway now exposes a generic OAuth compatibility layer for MCP clients that do not have ChatGPT-specific app setup.
+The gateway exposes a generic OAuth compatibility layer for remote MCP clients.
 
 Compatible clients should be able to:
 - use the official client metadata document at `/.well-known/oauth-client/vibecodr-mcp.json`
@@ -121,6 +124,12 @@ Important flow split:
 Public packaging boundary:
 - this repository remains the source-available hosted MCP server and OAuth gateway
 - any public CLI installer/runtime should live in a separate permissively licensed repo so hosted-service use stays clearly distinct from commercial reuse of this source code
+
+Canonical architecture boundary:
+- `Vibecodr-MCP` is the hosted gateway/server implementation
+- `Vibecodr-MCP-CLI` is a separate client/distribution package
+- ChatGPT is one remote MCP client of the gateway, not a separate server product
+- the former embedded widget surface is not part of production; `resources/list` remains empty and tools do not advertise `openai/outputTemplate`
 
 Token lifetime model for MCP clients:
 - the gateway-issued bearer access token is short-lived, roughly 1 hour
@@ -353,6 +362,8 @@ See:
 - `deploy/cloudflare/wrangler.gateway.toml.example`
 
 For local deployment, copy the example file to `deploy/cloudflare/wrangler.gateway.toml` and keep that local override out of Git.
+
+The current production Cloudflare Worker service name is still `vibecodr-openai-gateway` for route, binding, secret, and log continuity. Treat that as an infrastructure name, not the product architecture. New examples should use `vibecodr-mcp-gateway`.
 
 ## Security preflight
 
