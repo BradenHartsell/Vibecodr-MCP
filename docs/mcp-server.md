@@ -201,6 +201,23 @@ The most common causes are:
 
 The gateway no longer relies on Clerk exposing DCR directly to clients. Clerk still handles user identity. The gateway presents the generic OAuth surface.
 
+### Clerk domain confusion
+
+The production gateway should not use `accounts.vibecodr.space` as its issuer or
+discovery URL. That domain is Clerk's Account Portal UI. The gateway discovers
+upstream OAuth through Vibecodr's Clerk Frontend API proxy at
+`https://vibecodr.space/__clerk`, while exposing MCP-facing OAuth metadata at
+`https://openai.vibecodr.space`.
+
+`clerk.vibecodr.space` should exist as Clerk DNS verification for the Frontend
+API custom domain, but this Clerk instance can still return metadata whose
+issuer and token endpoints canonicalize to `https://vibecodr.space/__clerk`.
+That canonicalized metadata is the contract the gateway follows.
+
+For user-facing browser auth, configure Clerk Component paths to the Vibecodr
+application-domain pages (`/sign-in` and `/sign-up`) so the MCP flow does not
+depend on the Account Portal being reachable.
+
 ### Renewable ChatGPT auth
 
 To avoid forcing ChatGPT users back through auth after the first successful link:

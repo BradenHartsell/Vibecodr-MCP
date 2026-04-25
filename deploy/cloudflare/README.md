@@ -12,6 +12,12 @@ This repo now includes a real Cloudflare Worker runtime at `src/worker.ts` and a
 - Internal Vibecodr API Worker: `vibecodr-api`
   - Invoked through Cloudflare Service Binding `VIBE_API`
   - Not required to be publicly exposed for gateway-to-api communication
+- Clerk Frontend API proxy:
+  - Production OAuth discovery/token exchange uses `https://vibecodr.space/__clerk`
+  - `clerk.vibecodr.space` must exist as a DNS-only CNAME for Clerk domain verification, but this Clerk instance currently canonicalizes OAuth metadata to the `__clerk` proxy URL
+- Clerk Account Portal:
+  - `accounts.vibecodr.space` is a human UI surface only
+  - Do not use it as `OAUTH_ISSUER_URL` or `OAUTH_DISCOVERY_URL`
 - KV namespace: `OPERATIONS_KV`
   - Stores import operation state/idempotency in Worker runtime
 - Worker Rate Limiting bindings:
@@ -58,6 +64,12 @@ Recommended local secret file workflow:
 - Target: `vibecodr-openai-gateway.braden-yig.workers.dev`
 - Proxy status: Proxied (orange cloud)
 
+7. Ensure Clerk Frontend API verification DNS exists:
+- Name: `clerk`
+- Type: `CNAME`
+- Target: `frontend-api.clerk.services`
+- Proxy status: DNS only
+
 ## Configure OAuth and domain
 
 Set in your local `deploy/cloudflare/wrangler.gateway.toml`:
@@ -65,6 +77,7 @@ Set in your local `deploy/cloudflare/wrangler.gateway.toml`:
 - `APP_BASE_URL=https://openai.vibecodr.space`
 - `OAUTH_CLIENT_ID=<clerk client id>`
 - `OAUTH_ISSUER_URL=https://vibecodr.space/__clerk`
+- `OAUTH_DISCOVERY_URL=https://vibecodr.space/__clerk/.well-known/openid-configuration`
 - `OAUTH_SCOPES=openid profile email offline_access`
 - `MAX_REQUEST_BODY_BYTES=1500000`
 - `RATE_LIMIT_WINDOW_SECONDS=60`
@@ -92,6 +105,10 @@ In Clerk OAuth app:
 
 - Redirect URI:
   - `https://openai.vibecodr.space/auth/callback`
+- Component paths:
+  - Sign-in page on application domain: `https://vibecodr.space/sign-in`
+  - Sign-up page on application domain: `https://vibecodr.space/sign-up`
+  - Signing out path on application domain: `https://vibecodr.space/sign-in`
 - Keep:
   - Dynamic client registration: OFF
   - JWT access tokens: OFF (unless your API specifically requires JWTs)
@@ -109,7 +126,8 @@ Deploy:
 After deploy, verify:
 
 - `GET /health` returns 200
-- `GET /auth/start` redirects to Clerk
+- `GET /auth/start` redirects to Clerk through `https://vibecodr.space/__clerk/oauth/authorize`
+- MCP `/authorize` redirects through the gateway and then to the Vibecodr application-domain sign-in page when the user has no active Clerk session
 - OAuth callback sets `__Host-vc_session` in secure production, keeps `vc_session` for local non-HTTPS development, and redirects to `/`
 - `GET /api/auth/session` returns `authenticated: true` after login
 - `POST /mcp` responds to:

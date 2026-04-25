@@ -45,6 +45,16 @@ Optional:
 - OAUTH_AUDIENCE
 - COOKIE_SECURE
 
+For Vibecodr production, the gateway should discover Clerk through the
+Frontend API proxy on the application domain:
+
+- `OAUTH_ISSUER_URL=https://vibecodr.space/__clerk`
+- `OAUTH_DISCOVERY_URL=https://vibecodr.space/__clerk/.well-known/openid-configuration`
+
+Do not use `accounts.vibecodr.space` for these values. That domain is Clerk's
+Account Portal UI and can be challenged or unavailable independently of the
+machine OAuth endpoints.
+
 ## Build and run locally with Docker
 
 1. Build image:
@@ -64,9 +74,14 @@ Optional:
 - https://<your-domain>/auth/callback
 4. Ensure production MCP URL is:
 - https://<your-domain>/mcp
-5. Ensure Vibecodr API accepts OAuth provider access tokens at:
+5. Ensure Clerk Component paths send sign-in/sign-up/sign-out flows to the
+   Vibecodr application domain, not the Account Portal, for the MCP production
+   browser flow:
+- https://vibecodr.space/sign-in
+- https://vibecodr.space/sign-up
+6. Ensure Vibecodr API accepts OAuth provider access tokens at:
 - POST /auth/cli/exchange
-6. Validate:
+7. Validate:
 - npm run validate:env
 - npm run build
 - /health returns 200

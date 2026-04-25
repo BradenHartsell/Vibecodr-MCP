@@ -18,7 +18,20 @@ Collect:
 - `OAUTH_CLIENT_ID`
 - `OAUTH_CLIENT_SECRET` (if confidential)
 - `OAUTH_SCOPES=openid profile email offline_access`
-- issuer domain (for example `https://<your-clerk-domain>`)
+- issuer/discovery surface for the Clerk Frontend API
+
+For Vibecodr production, the canonical machine surface is the application-domain
+Frontend API proxy:
+
+- `https://vibecodr.space/__clerk`
+
+The dashboard may also show:
+
+- `https://clerk.vibecodr.space` - Clerk Frontend API custom domain/DNS verification
+- `https://accounts.vibecodr.space` - Clerk Account Portal UI
+
+Do not configure the MCP gateway to discover OAuth from `accounts.vibecodr.space`.
+It is a user-facing portal, not the gateway's issuer/token surface.
 
 ## 2. App environment
 
@@ -30,7 +43,8 @@ Set:
 - `OAUTH_CLIENT_ID=<from-clerk>`
 - `OAUTH_CLIENT_SECRET=<from-clerk>` (if confidential)
 - `OAUTH_SCOPES=openid profile email offline_access`
-- `OAUTH_ISSUER_URL=https://<your-clerk-domain>`
+- `OAUTH_ISSUER_URL=https://vibecodr.space/__clerk`
+- `OAUTH_DISCOVERY_URL=https://vibecodr.space/__clerk/.well-known/openid-configuration`
 
 You can optionally use explicit endpoints instead:
 
@@ -103,6 +117,17 @@ MCP OAuth flow is different:
 - expect redirect to Clerk
 - after approval, the gateway should redirect to the MCP client's registered `redirect_uri`, not to `/`
 
+Production domain smoke checks:
+
+1. `https://vibecodr.space/__clerk/.well-known/openid-configuration`
+- expect JSON with `authorization_endpoint` and `token_endpoint`.
+2. `https://clerk.vibecodr.space/.well-known/openid-configuration`
+- expect either the same Frontend API metadata or metadata that canonicalizes to the configured `__clerk` proxy issuer.
+3. `https://vibecodr.space/sign-in`
+- expect the Vibecodr app-hosted sign-in page to load.
+4. `https://accounts.vibecodr.space/sign-in`
+- do not depend on this path for MCP production auth.
+
 ## 6. Security notes
 
 - Keep `SESSION_SIGNING_KEY` and `OAUTH_CLIENT_SECRET` in secret manager.
@@ -117,3 +142,9 @@ Recommended for this architecture:
 
 - Dynamic client registration: OFF
 - Generate access tokens as JWTs: OFF (enable only if Vibecodr API requires local JWT validation instead of introspection/exchange)
+
+Recommended Component paths for production:
+
+- Sign-in page on application domain: `https://vibecodr.space/sign-in`
+- Sign-up page on application domain: `https://vibecodr.space/sign-up`
+- Signing out path on application domain: `https://vibecodr.space/sign-in`

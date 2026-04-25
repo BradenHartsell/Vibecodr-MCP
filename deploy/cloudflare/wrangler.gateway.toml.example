@@ -23,6 +23,9 @@ APP_BASE_URL = "https://openai.vibecodr.space"
 VIBECDR_API_BASE = "https://api.vibecodr.space"
 OAUTH_PROVIDER_NAME = "clerk"
 OAUTH_CLIENT_ID = "replace_me"
+# Vibecodr's Clerk production instance uses the Frontend API proxy on the
+# application domain. Do not point MCP OAuth discovery at
+# accounts.vibecodr.space; that is the human Account Portal surface.
 OAUTH_ISSUER_URL = "https://vibecodr.space/__clerk/"
 OAUTH_DISCOVERY_URL = "https://vibecodr.space/__clerk/.well-known/openid-configuration"
 OAUTH_SCOPES = "openid profile email offline_access"

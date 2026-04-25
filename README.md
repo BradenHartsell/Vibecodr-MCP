@@ -235,11 +235,18 @@ You can keep your retrievable credentials there and copy values into runtime env
 1. Create a Clerk OAuth application for this app.
 2. Configure callback URL:
 - `https://<your-domain>/auth/callback`
-3. Set:
+3. Use the production Clerk Frontend API proxy for machine OAuth discovery:
+- `OAUTH_ISSUER_URL=https://vibecodr.space/__clerk`
+- `OAUTH_DISCOVERY_URL=https://vibecodr.space/__clerk/.well-known/openid-configuration`
+4. Keep `accounts.vibecodr.space` out of gateway OAuth config. It is the Clerk Account Portal UI, not the issuer or token surface for MCP clients.
+5. Set:
 - `OAUTH_CLIENT_ID`
 - `OAUTH_CLIENT_SECRET` (if Clerk app is confidential)
-- `OAUTH_ISSUER_URL=https://<your-clerk-domain>` (or set explicit endpoints)
-4. Ensure Vibecodr API is configured to accept Clerk-issued access tokens at:
+6. In Clerk Component paths, prefer application-domain auth pages for the production app:
+- sign in: `https://vibecodr.space/sign-in`
+- sign up: `https://vibecodr.space/sign-up`
+- sign out fallback: `https://vibecodr.space/sign-in`
+7. Ensure Vibecodr API is configured to accept Clerk-issued access tokens at:
 - `POST /auth/cli/exchange`
 
 ## MCP tools
