@@ -8,6 +8,8 @@ Vibecodr exposes one remote MCP product:
 
 The tool surface is goal-shaped and client-neutral. There is no embedded widget surface.
 
+ChatGPT is a remote MCP client of this gateway, not a separate server product. The active production architecture is one hosted MCP gateway, one OAuth compatibility layer, and one shared tool/prompt surface. See [`canonical-architecture.md`](./canonical-architecture.md) for the boundary contract.
+
 ## Endpoints
 
 Base application:
@@ -236,3 +238,5 @@ This is one product, not two separate products.
 
 - All clients share tools and business logic.
 - The gateway compatibility layer exists to make OAuth usable for strict remote MCP clients.
+- The first-party CLI remains a separate client/distribution package, not a second server.
+- A ChatGPT widget or OpenAI app package should only return after a fresh product/security decision, and then as an optional UI resource layered onto this same MCP server.

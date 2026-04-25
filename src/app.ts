@@ -463,7 +463,7 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
       )
   );
 
-  register("GET", /^\/health$/, async () => jsonResponse(200, { ok: true, service: "vibecodr-openai-app" }));
+  register("GET", /^\/health$/, async () => jsonResponse(200, { ok: true, service: "vibecodr-mcp-gateway" }));
   register("GET", /^\/\.well-known\/oauth-protected-resource$/, async () =>
     jsonResponse(200, rootProtectedResourceMetadata, corsHeaders())
   );

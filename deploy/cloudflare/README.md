@@ -1,4 +1,4 @@
-# Cloudflare Deployment: Vibecodr OpenAI Gateway Worker
+# Cloudflare Deployment: Vibecodr MCP Gateway Worker
 
 This repo now includes a real Cloudflare Worker runtime at `src/worker.ts` and a ready-to-fill Wrangler config at:
 
@@ -9,6 +9,7 @@ This repo now includes a real Cloudflare Worker runtime at `src/worker.ts` and a
 - Public Worker: `vibecodr-openai-gateway`
   - Hosts OAuth endpoints, MCP endpoint, auth session APIs
   - Runs on `openai.vibecodr.space`
+  - Retains its legacy infrastructure name so existing routes, Wrangler secrets, bindings, and logs remain intact
 - Internal Vibecodr API Worker: `vibecodr-api`
   - Invoked through Cloudflare Service Binding `VIBE_API`
   - Not required to be publicly exposed for gateway-to-api communication
@@ -63,6 +64,8 @@ Recommended local secret file workflow:
 - Type: `CNAME`
 - Target: `vibecodr-openai-gateway.braden-yig.workers.dev`
 - Proxy status: Proxied (orange cloud)
+
+For a brand-new deployment created from the example config, use the neutral Worker name `vibecodr-mcp-gateway` and point DNS at that Worker target instead. Do not rename the existing production Worker unless secrets and bindings have been migrated deliberately.
 
 7. Ensure Clerk Frontend API verification DNS exists:
 - Name: `clerk`

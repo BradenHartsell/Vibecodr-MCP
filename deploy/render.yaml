@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: vibecodr-openai-app
+    name: vibecodr-mcp-gateway
     runtime: docker
     plan: starter
     healthCheckPath: /health
