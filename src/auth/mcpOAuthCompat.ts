@@ -1183,6 +1183,7 @@ export async function handleGatewayRevoke(
   req: Request,
   config: AppConfig,
   refreshStore: OAuthRefreshStore | undefined,
+  sessionStore: SessionStore | undefined,
   maxRequestBodyBytes: number,
   httpFetch: HttpFetch = fetch
 ): Promise<Response> {
@@ -1197,6 +1198,9 @@ export async function handleGatewayRevoke(
   }
   const form = new URLSearchParams(bodyText);
   const token = form.get("token") || "";
+  if (sessionStore && token) {
+    await sessionStore.deleteBySigned(token);
+  }
   const revokedGrant = refreshStore && token ? await refreshStore.revoke(token) : null;
   const upstream = await fetchUpstreamAuthMetadata(config, httpFetch);
   if (!upstream.revocation_endpoint) {

@@ -8,12 +8,14 @@ import {
   buildGatewayAuthMetadata,
   fetchUpstreamAuthMetadata,
   handleGatewayAuthorize,
+  handleGatewayRevoke,
   handleGatewayToken
 } from "../src/auth/mcpOAuthCompat.js";
 import { OAuthRefreshStore } from "../src/auth/oauthRefreshStore.js";
 import { buildOfficialMcpClientMetadata } from "../src/auth/officialMcpClient.js";
 import { buildToolWwwAuthenticate } from "../src/mcp/tools.js";
 import { SessionStore } from "../src/auth/sessionStore.js";
+import { SessionRevocationStore } from "../src/auth/sessionRevocationStore.js";
 import type { KvNamespaceLike } from "../src/storage/operationStoreKv.js";
 
 function base64UrlEncode(buf: Buffer): string {
@@ -335,6 +337,31 @@ test("refresh exchange replays the successful response when an official client r
   assert.deepEqual(replayPayload, firstPayload);
   assert.equal(upstreamRefreshCalls, 1);
   assert.equal(vibecodrExchangeCalls, 1);
+});
+
+test("revocation endpoint revokes gateway bearer session tokens", async () => {
+  const config = createConfig();
+  const revocationStore = new SessionRevocationStore(new MockKv());
+  const sessionStore = new SessionStore(config.sessionSigningKey, revocationStore);
+  const issued = sessionStore.issue("user_123", "vibecodr-access-token", 3600, "brade");
+
+  assert.ok(await sessionStore.getActiveBySigned(issued.signedToken));
+
+  const res = await handleGatewayRevoke(
+    new Request("https://openai.vibecodr.space/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: issued.signedToken }).toString()
+    }),
+    config,
+    undefined,
+    sessionStore,
+    10_000,
+    discoveryFetch
+  );
+
+  assert.equal(res.status, 204);
+  assert.equal(await sessionStore.getActiveBySigned(issued.signedToken), null);
 });
 
 test("tool auth challenge includes resource metadata and required scopes", () => {

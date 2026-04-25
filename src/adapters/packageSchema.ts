@@ -32,7 +32,9 @@ const baseSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   idempotencyKey: z.string().optional(),
   github: z.object({
-    url: z.string().url(),
+    url: z.string().url().refine(isAllowedGitHubImportUrl, {
+      message: "GitHub import URL must be an HTTPS github.com repository URL without path, query, or fragment extras."
+    }),
     branch: z.string().optional(),
     rootHint: z.string().optional(),
     allowModuleScripts: z.boolean().optional(),
@@ -46,6 +48,23 @@ const baseSchema = z.object({
     async: z.boolean().optional()
   }).optional()
 });
+
+function isAllowedGitHubImportUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+    if (url.protocol !== "https:") return false;
+    if (hostname !== "github.com" && hostname !== "www.github.com") return false;
+    if (url.username || url.password || url.port || url.search || url.hash) return false;
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts.length !== 2) return false;
+    const [owner, repo] = parts;
+    if (!owner || !repo) return false;
+    return /^[A-Za-z0-9_.-]+$/.test(owner) && /^[A-Za-z0-9_.-]+(?:\.git)?$/.test(repo);
+  } catch {
+    return false;
+  }
+}
 
 function normalizeFiles(files: Array<{ path: string; content: string; contentEncoding: "utf8" | "base64" }>) {
   const out = [...files].sort((a, b) => a.path.localeCompare(b.path));

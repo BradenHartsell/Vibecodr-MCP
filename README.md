@@ -59,7 +59,7 @@ See [docs/public-repo.md](docs/public-repo.md) for the public-repo boundary and 
 - Ingestion modes:
   - `direct_files`
   - `zip_import`
-  - `github_import`
+  - `github_import` for HTTPS `github.com` repository URLs only
 - Draft, compile, publish, cancel operation tooling
 - Draft listing and draft detail tools
 - Persistent operation store with idempotency

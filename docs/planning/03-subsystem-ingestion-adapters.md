@@ -72,6 +72,7 @@ Path 2 zip_import:
 
 Path 3 github_import:
 - POST /import/github
+- accepts HTTPS github.com repository URLs only
 - poll GET /import/jobs/:id as needed
 - optional compile and publish
 

@@ -188,6 +188,8 @@ If any answer is uncertain, trace the gap before declaring done.
 
 Use read-only subagents for broad audits across independent domains. Give each agent a narrow scope and ask for file-backed findings.
 
+Never interrupt subagents; their work is just as valuable as yours.
+
 Do not let subagent recommendations become implementation without a synthesis pass. Convert them into explicit tool-surface decisions, phases, and verification gates first.
 
 ## High-Signal References

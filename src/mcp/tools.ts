@@ -144,6 +144,9 @@ const CREATION_FILE_INPUT_SCHEMA = {
   additionalProperties: false
 } as const;
 
+const GITHUB_REPOSITORY_URL_PATTERN =
+  "^https://(?:www\\.)?github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\\.git)?/?$";
+
 const CREATION_PAYLOAD_INPUT_SCHEMA = {
   type: "object",
   properties: {
@@ -162,7 +165,13 @@ const CREATION_PAYLOAD_INPUT_SCHEMA = {
       type: "object",
       required: ["url"],
       properties: {
-        url: { type: "string", format: "uri" },
+        url: {
+          type: "string",
+          format: "uri",
+          pattern: GITHUB_REPOSITORY_URL_PATTERN,
+          description:
+            "HTTPS github.com repository URL only, for example https://github.com/owner/repo or https://github.com/owner/repo.git. Do not include branch/tree paths, query strings, fragments, credentials, ports, or raw/file URLs."
+        },
         branch: { type: "string" },
         rootHint: { type: "string" },
         allowModuleScripts: { type: "boolean" },
@@ -187,7 +196,7 @@ const CREATION_PAYLOAD_INPUT_SCHEMA = {
 } as const;
 
 const CREATION_PAYLOAD_REQUIREMENTS_TEXT =
-  "Payload format: use payload.importMode to choose the lane. For direct_files, provide payload.files with { path, content, contentEncoding? }. For github_import, provide payload.github.url. For zip_import, provide payload.zip.fileName and payload.zip.fileBase64. Optional payload fields are title, runner, entry, sourceReference, metadata, and idempotencyKey. Do not invent wrapper keys outside this shape.";
+  "Payload format: use payload.importMode to choose the lane. For direct_files, provide payload.files with { path, content, contentEncoding? }. For github_import, provide payload.github.url as an HTTPS github.com/<owner>/<repo>[.git] repository URL only; do not include branch/tree paths, query strings, fragments, credentials, ports, raw URLs, or file URLs. For zip_import, provide payload.zip.fileName and payload.zip.fileBase64. Optional payload fields are title, runner, entry, sourceReference, metadata, and idempotencyKey. Do not invent wrapper keys outside this shape.";
 
 const CONFIRMED_WRITE_INPUT_SCHEMA = {
   type: "boolean",

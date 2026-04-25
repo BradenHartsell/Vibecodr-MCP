@@ -138,6 +138,42 @@ async function main() {
       }),
     /Path traversal blocked/
   );
+  assert.equal(
+    parseNormalizedPackage({
+      sourceType: "codex_v1",
+      importMode: "github_import",
+      title: "GitHub Regression Fixture",
+      github: { url: "https://github.com/BradenHartsell/Vibecodr-MCP" }
+    }).github?.url,
+    "https://github.com/BradenHartsell/Vibecodr-MCP"
+  );
+  expectThrows(
+    () =>
+      parseNormalizedPackage({
+        sourceType: "codex_v1",
+        importMode: "github_import",
+        github: { url: "http://127.0.0.1:8080/repo" }
+      }),
+    /GitHub import URL must be an HTTPS github\.com repository URL/
+  );
+  expectThrows(
+    () =>
+      parseNormalizedPackage({
+        sourceType: "codex_v1",
+        importMode: "github_import",
+        github: { url: "https://github.com/BradenHartsell/Vibecodr-MCP/tree/main" }
+      }),
+    /GitHub import URL must be an HTTPS github\.com repository URL/
+  );
+  expectThrows(
+    () =>
+      parseNormalizedPackage({
+        sourceType: "codex_v1",
+        importMode: "github_import",
+        github: { url: "https://github.com/BradenHartsell/Vibecodr-MCP?ref=main" }
+      }),
+    /GitHub import URL must be an HTTPS github\.com repository URL/
+  );
 
   const port = 3300 + Math.floor(Math.random() * 300);
   const oauthPort = port + 500;
@@ -551,6 +587,7 @@ async function main() {
           assertions: [
             "path_policy_guards",
             "package_schema_guards",
+            "github_import_url_allowlist",
             "request_body_limit",
             "generic_oauth_metadata_and_registration",
             "generic_oauth_authorize_and_token_flow",
