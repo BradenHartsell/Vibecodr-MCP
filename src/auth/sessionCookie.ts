@@ -11,7 +11,12 @@ function readCookieValue(cookieHeader: string, name: string): string | undefined
     .split(";")
     .map((part) => part.trim())
     .find((part) => part.startsWith(prefix));
-  return token ? decodeURIComponent(token.slice(prefix.length)) : undefined;
+  if (!token) return undefined;
+  try {
+    return decodeURIComponent(token.slice(prefix.length));
+  } catch {
+    return undefined;
+  }
 }
 
 export function readSessionCookie(cookieHeader: string): { value?: string | undefined; legacy: boolean } {

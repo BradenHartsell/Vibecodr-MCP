@@ -525,7 +525,7 @@ export function createAppRequestHandler(deps: AppRuntimeDeps): AppRequestHandler
     )
   );
   register("POST", /^\/revoke$/, async (req) =>
-    handleGatewayRevoke(req, config, refreshGrantStore, config.maxRequestBodyBytes, oauthFetch)
+    handleGatewayRevoke(req, config, refreshGrantStore, sessionStore, config.maxRequestBodyBytes, oauthFetch)
   );
   register("HEAD", /^\/register$/, async () =>
     new Response(null, {

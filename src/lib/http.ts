@@ -98,7 +98,11 @@ export function parseCookies(req: Request): Record<string, string> {
   for (const part of raw.split(";")) {
     const [k, ...rest] = part.trim().split("=");
     if (!k) continue;
-    out[k] = decodeURIComponent(rest.join("=") || "");
+    try {
+      out[k] = decodeURIComponent(rest.join("=") || "");
+    } catch {
+      continue;
+    }
   }
   return out;
 }
