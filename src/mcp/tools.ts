@@ -1687,10 +1687,13 @@ const TOOL_OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
           },
           runtimeEnv: {
             type: "object",
-            required: ["pulse", "fetch", "log", "request", "runtime", "waitUntil"],
+            required: ["pulse", "fetch", "secrets", "webhooks", "connections", "log", "request", "runtime", "waitUntil"],
             properties: {
               pulse: { type: "string", const: "env.pulse.*" },
               fetch: { type: "string", const: "env.fetch" },
+              secrets: { type: "string", const: "env.secrets.bearer/header/query/verifyHmac" },
+              webhooks: { type: "string", const: 'env.webhooks.verify("stripe")' },
+              connections: { type: "string", const: "env.connections.use(provider).fetch" },
               log: { type: "string", const: "env.log" },
               request: { type: "string", const: "env.request" },
               runtime: { type: "string", const: "env.runtime" },
@@ -1700,9 +1703,12 @@ const TOOL_OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
           },
           runtimeSemantics: {
             type: "object",
-            required: ["fetch", "log", "request", "runtime", "waitUntil", "database", "cleanupAuthority"],
+            required: ["fetch", "secrets", "webhooks", "connections", "log", "request", "runtime", "waitUntil", "database", "cleanupAuthority"],
             properties: {
               fetch: { type: "string" },
+              secrets: { type: "string" },
+              webhooks: { type: "string" },
+              connections: { type: "string" },
               log: { type: "string" },
               request: { type: "string" },
               runtime: { type: "string" },
@@ -2670,6 +2676,9 @@ const ToolOutputValidators: Record<string, z.ZodTypeAny> = {
       runtimeEnv: z.object({
         pulse: z.literal("env.pulse.*"),
         fetch: z.literal("env.fetch"),
+        secrets: z.literal("env.secrets.bearer/header/query/verifyHmac"),
+        webhooks: z.literal('env.webhooks.verify("stripe")'),
+        connections: z.literal("env.connections.use(provider).fetch"),
         log: z.literal("env.log"),
         request: z.literal("env.request"),
         runtime: z.literal("env.runtime"),
@@ -2677,6 +2686,9 @@ const ToolOutputValidators: Record<string, z.ZodTypeAny> = {
       }),
       runtimeSemantics: z.object({
         fetch: z.string(),
+        secrets: z.string(),
+        webhooks: z.string(),
+        connections: z.string(),
         log: z.string(),
         request: z.string(),
         runtime: z.string(),
