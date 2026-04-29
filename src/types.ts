@@ -187,6 +187,9 @@ export type PulseDescriptorSetupMetadata = {
   runtimeEnv: {
     pulse: "env.pulse.*";
     fetch: "env.fetch";
+    secrets: "env.secrets.bearer/header/query/verifyHmac";
+    webhooks: 'env.webhooks.verify("stripe")';
+    connections: "env.connections.use(provider).fetch";
     log: "env.log";
     request: "env.request";
     runtime: "env.runtime";
@@ -194,6 +197,9 @@ export type PulseDescriptorSetupMetadata = {
   };
   runtimeSemantics: {
     fetch: string;
+    secrets: string;
+    webhooks: string;
+    connections: string;
     log: string;
     request: string;
     runtime: string;

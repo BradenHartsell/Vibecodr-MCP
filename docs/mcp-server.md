@@ -181,7 +181,7 @@ These prompts are intended to steer first-run behavior such as:
 - asking whether the user wants SEO and social preview polish for a public launch
 - asking whether the user already has a cover image or wants generated art
 - checking account capabilities before promising premium polish or pulse-backed behavior
-- teaching Pulse capability APIs only: policy-mediated `env.fetch`, structured `env.log`, sanitized `env.request`, safe `env.runtime`, and best-effort `env.waitUntil`
+- teaching Pulse capability APIs only: policy-mediated `env.fetch`, policy-bound `env.secrets.bearer/header/query/verifyHmac`, Stripe-only `env.webhooks.verify("stripe")`, provider-scoped `env.connections.use(provider).fetch`, structured `env.log`, sanitized `env.request`, safe `env.runtime`, and best-effort `env.waitUntil`
 - keeping recovery flows in plain language instead of dumping operation internals
 
 ## Troubleshooting

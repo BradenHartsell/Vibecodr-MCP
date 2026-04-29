@@ -228,12 +228,18 @@ test("pulse setup guidance exposes normalized descriptor metadata", async () => 
   assert.deepEqual(structured.descriptorMetadata?.runtimeEnv, {
     pulse: "env.pulse.*",
     fetch: "env.fetch",
+    secrets: "env.secrets.bearer/header/query/verifyHmac",
+    webhooks: 'env.webhooks.verify("stripe")',
+    connections: "env.connections.use(provider).fetch",
     log: "env.log",
     request: "env.request",
     runtime: "env.runtime",
     waitUntil: "env.waitUntil"
   });
   assert.match(structured.descriptorMetadata?.runtimeSemantics?.fetch || "", /policy-mediated fetch/);
+  assert.match(structured.descriptorMetadata?.runtimeSemantics?.secrets || "", /does not expose raw secret values/);
+  assert.match(structured.descriptorMetadata?.runtimeSemantics?.webhooks || "", /bounded raw body/);
+  assert.match(structured.descriptorMetadata?.runtimeSemantics?.connections || "", /provider tokens/);
   assert.match(structured.descriptorMetadata?.runtimeSemantics?.log || "", /structured event records/);
   assert.match(structured.descriptorMetadata?.runtimeSemantics?.request || "", /sanitized by default/);
   assert.match(structured.descriptorMetadata?.runtimeSemantics?.runtime || "", /correlation metadata only/);
@@ -329,7 +335,7 @@ test("pulse setup guidance fails closed on descriptor blockers", async () => {
       descriptorSetup: {
         setupTasks: [],
         compatibility: {
-          blockers: ["Source uses env.secrets.fetch but descriptor setup declares no secrets."],
+          blockers: ["Source uses env.fetch with env.secrets.bearer but descriptor setup declares no secrets."],
           warnings: []
         }
       }
@@ -343,7 +349,7 @@ test("pulse setup guidance fails closed on descriptor blockers", async () => {
 
   assert.equal(structured.descriptorEvaluation?.status, "blocked");
   assert.deepEqual(structured.descriptorEvaluation?.blockers, [
-    "Source uses env.secrets.fetch but descriptor setup declares no secrets."
+    "Source uses env.fetch with env.secrets.bearer but descriptor setup declares no secrets."
   ]);
   assert.match(result.content[0]?.text || "", /blocked/i);
   assert.match(structured.whenYouNeedPulses?.join(" ") || "", /fix descriptor blockers/i);

@@ -233,7 +233,7 @@ Start with:
 get_pulse_setup_guidance
 ```
 
-That guidance is descriptor-derived only when you pass the actual `descriptorSetup` projection. Without it, the tool returns general Pulse setup rules, not proof that a specific Pulse is frontend-only or backend-backed. Descriptor-backed guidance should teach capability-shaped Pulse APIs only: `env.pulse`, Vibecodr policy-mediated `env.fetch`, structured `env.log`, sanitized `env.request`, safe correlation-only `env.runtime`, and best-effort `env.waitUntil`. It should not teach raw platform bindings, dispatch details, raw authorization headers, physical storage, or owner lifecycle cleanup as runtime authority.
+That guidance is descriptor-derived only when you pass the actual `descriptorSetup` projection. Without it, the tool returns general Pulse setup rules, not proof that a specific Pulse is frontend-only or backend-backed. Descriptor-backed guidance should teach capability-shaped Pulse APIs only: `env.pulse`, Vibecodr policy-mediated `env.fetch`, policy-bound `env.secrets.bearer/header/query/verifyHmac`, Stripe-only `env.webhooks.verify("stripe")`, provider-scoped `env.connections.use(provider).fetch`, structured `env.log`, sanitized `env.request`, safe correlation-only `env.runtime`, and best-effort `env.waitUntil`. It should not teach raw platform bindings, copied tokens, dispatch details, raw authorization headers, physical storage, or owner lifecycle cleanup as runtime authority.
 
 Frontend-only is enough when:
 

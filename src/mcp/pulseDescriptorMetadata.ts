@@ -40,6 +40,9 @@ export const PULSE_DESCRIPTOR_SETUP_METADATA: PulseDescriptorSetupMetadata = {
   runtimeEnv: {
     pulse: "env.pulse.*",
     fetch: "env.fetch",
+    secrets: "env.secrets.bearer/header/query/verifyHmac",
+    webhooks: 'env.webhooks.verify("stripe")',
+    connections: "env.connections.use(provider).fetch",
     log: "env.log",
     request: "env.request",
     runtime: "env.runtime",
@@ -47,6 +50,9 @@ export const PULSE_DESCRIPTOR_SETUP_METADATA: PulseDescriptorSetupMetadata = {
   },
   runtimeSemantics: {
     fetch: "env.fetch is Vibecodr policy-mediated fetch, not raw platform fetch.",
+    secrets: "env.secrets exposes policy-bound auth and verification helpers; it does not expose raw secret values.",
+    webhooks: "env.webhooks.verify(\"stripe\") verifies the exact bounded raw body before trusted event parsing.",
+    connections: "env.connections.use(provider).fetch keeps provider tokens and refresh logic platform-owned.",
     log: "env.log accepts structured event records instead of raw variadic logging.",
     request: "env.request is sanitized by default; raw-body access is explicit, bounded, and still sanitized.",
     runtime: "env.runtime carries safe correlation metadata only, not authorization or owner identity.",
@@ -114,9 +120,9 @@ export function buildPulseSetupGuidance(input?: { descriptorSetup?: unknown }): 
     pulseBestPractices: [
       "Keep the pulse surface narrow and name exactly what the backend action does.",
       "Pass only the minimum data from the vibe into the pulse.",
-      "Use descriptor setup tasks for pulse values, secrets, connections, raw body, and state placeholders.",
+      "Use descriptor setup tasks for pulse values, policy-bound secrets, connections, raw body, and state placeholders.",
       ...descriptorEvaluation.setupTasks.map((task) => formatSetupTaskPractice(task)),
-      "Use policy fetch, structured logging, sanitized requests, safe runtime correlation ids, and best-effort waitUntil language.",
+      "Use env.fetch with env.secrets.bearer/header/query, env.webhooks.verify(\"stripe\"), env.connections.use(provider).fetch, structured logging, sanitized requests, safe runtime correlation ids, and best-effort waitUntil language.",
       "Check account capabilities before promising additional pulses or private pulses."
     ],
     accountReminder:
@@ -267,13 +273,13 @@ function buildPulseEscalationGuidance(evaluation: PulseDescriptorSetupEvaluation
   if (evaluation.guidanceSource === "descriptor_setup" && evaluation.requiresBackendSetup) {
     return [
       `The descriptor declares ${formatSetupTaskKinds(evaluation.activeSetupTaskKinds)} setup tasks.`,
-      "Use only those descriptor-derived setup tasks when explaining secrets, raw body handling, state, connections, env values, or database guidance.",
+      "Use only those descriptor-derived setup tasks when explaining policy-bound secrets, raw body handling, future state placeholders, connections, env values, or database guidance.",
       "Check account capabilities before promising additional pulses or private pulses."
     ];
   }
   return [
     "The descriptor declares pulse values, secrets, connections, raw body handling, or future state resources.",
-    "The app needs provider credentials, signed requests, webhooks, scheduled work, or trusted side effects.",
+    "The app needs policy-bound provider credentials, signed requests, Stripe webhook verification, scheduled work, or trusted side effects.",
     "The product requirement cannot safely run as browser-only vibe code."
   ];
 }
@@ -289,7 +295,7 @@ export function pulseDescriptorDecisionRequirements(): string[] {
     "If the user is connected, call get_account_capabilities before promising pulse-backed behavior.",
     "Default to frontend-only when the descriptor has no backend setup tasks and the app does not need trusted side effects.",
     "Recommend pulses only when product requirements or descriptor setup metadata clearly need trusted server-side work.",
-    `Use ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.pulse}, ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.fetch}, ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.log}, ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.request}, ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.runtime}, and ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.waitUntil} vocabulary for Pulse authoring guidance.`,
+    `Use ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.pulse}, ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.fetch}, ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.secrets}, ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.webhooks}, ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.connections}, ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.log}, ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.request}, ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.runtime}, and ${PULSE_DESCRIPTOR_SETUP_METADATA.runtimeEnv.waitUntil} vocabulary for Pulse authoring guidance.`,
     ...Object.values(PULSE_DESCRIPTOR_SETUP_METADATA.runtimeSemantics)
   ];
 }
