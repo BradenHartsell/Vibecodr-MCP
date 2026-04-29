@@ -19,6 +19,7 @@ import type { SessionRevocationStore } from "../auth/sessionRevocationStore.js";
 import type { VibecodrClient } from "../vibecodr/client.js";
 import type { Telemetry } from "../observability/telemetry.js";
 import type { CodeModeRuntimePolicy } from "./codeModeRuntime.js";
+import { buildPulseSetupGuidance } from "./pulseDescriptorMetadata.js";
 import type {
   ImportOperation,
   LiveVibeSummary,
@@ -1371,27 +1372,12 @@ const JSON_SOCIAL_SEARCH_RESULT_SCHEMA = {
   type: "object",
   required: ["type", "id", "title"],
   properties: {
-    type: { type: "string", enum: ["post", "profile", "tag", "capsule", "thread", "unknown"] },
+    type: { type: "string", enum: ["post", "profile", "tag", "unknown"] },
     id: { type: "string" },
     title: { type: "string" },
     url: { type: "string" },
     description: { type: "string" },
     authorHandle: { type: "string" }
-  },
-  additionalProperties: false
-} as const;
-
-const JSON_SOCIAL_COMMENT_SCHEMA = {
-  type: "object",
-  required: ["id", "body"],
-  properties: {
-    id: { type: "string" },
-    body: { type: "string" },
-    authorHandle: { type: "string" },
-    authorName: { type: ["string", "null"] },
-    createdAt: { anyOf: [{ type: "number" }, { type: "string" }] },
-    parentCommentId: { type: ["string", "null"] },
-    score: { type: "number" }
   },
   additionalProperties: false
 } as const;
@@ -1642,10 +1628,126 @@ const TOOL_OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
   get_pulse_setup_guidance: {
     type: "object",
-    required: ["headline", "summary", "whenFrontendOnlyIsEnough", "whenYouNeedPulses", "runnerGuidance", "pulseBestPractices", "accountReminder"],
+    required: ["headline", "summary", "descriptorMetadata", "descriptorEvaluation", "whenFrontendOnlyIsEnough", "whenYouNeedPulses", "runnerGuidance", "pulseBestPractices", "accountReminder"],
     properties: {
       headline: { type: "string" },
       summary: { type: "string" },
+      descriptorMetadata: {
+        type: "object",
+        required: [
+          "sourceOfTruth",
+          "apiVersion",
+          "normalizedDescriptorVersion",
+          "stateProtocolVersion",
+          "resourceConfigVersion",
+          "apiProjection",
+          "setupTaskKinds",
+          "activeSetupTaskKinds",
+          "requiresBackendSetup",
+          "guidanceSource",
+          "compatibility",
+          "runtimeEnv",
+          "runtimeSemantics",
+          "descriptorOwnedSurfaces",
+          "advancedCompatibility"
+        ],
+        properties: {
+          sourceOfTruth: { type: "string", const: "PulseDescriptor" },
+          apiVersion: { type: "string", const: "pulse/v1" },
+          normalizedDescriptorVersion: { type: "integer", const: 1 },
+          stateProtocolVersion: { type: "string" },
+          resourceConfigVersion: { type: "integer", const: 1 },
+          apiProjection: {
+            type: "object",
+            required: ["openApiSchema", "responseField"],
+            properties: {
+              openApiSchema: { type: "string", const: "PulseDescriptorSetupProjection" },
+              responseField: { type: "string", const: "descriptorSetup" }
+            },
+            additionalProperties: false
+          },
+          setupTaskKinds: {
+            type: "array",
+            items: { type: "string", enum: ["pulse", "secret", "env", "connection", "database", "review", "raw_body", "state"] }
+          },
+          activeSetupTaskKinds: {
+            type: "array",
+            items: { type: "string", enum: ["pulse", "secret", "env", "connection", "database", "review", "raw_body", "state"] }
+          },
+          requiresBackendSetup: { type: "boolean" },
+          guidanceSource: { type: "string", enum: ["general_contract", "descriptor_setup"] },
+          compatibility: {
+            type: "object",
+            required: ["blockerCount", "warningCount"],
+            properties: {
+              blockerCount: { type: "integer" },
+              warningCount: { type: "integer" }
+            },
+            additionalProperties: false
+          },
+          runtimeEnv: {
+            type: "object",
+            required: ["pulse", "fetch", "log", "request", "runtime", "waitUntil"],
+            properties: {
+              pulse: { type: "string", const: "env.pulse.*" },
+              fetch: { type: "string", const: "env.fetch" },
+              log: { type: "string", const: "env.log" },
+              request: { type: "string", const: "env.request" },
+              runtime: { type: "string", const: "env.runtime" },
+              waitUntil: { type: "string", const: "env.waitUntil" }
+            },
+            additionalProperties: false
+          },
+          runtimeSemantics: {
+            type: "object",
+            required: ["fetch", "log", "request", "runtime", "waitUntil", "database", "cleanupAuthority"],
+            properties: {
+              fetch: { type: "string" },
+              log: { type: "string" },
+              request: { type: "string" },
+              runtime: { type: "string" },
+              waitUntil: { type: "string" },
+              database: { type: "string" },
+              cleanupAuthority: { type: "string" }
+            },
+            additionalProperties: false
+          },
+          descriptorOwnedSurfaces: { type: "array", items: { type: "string" } },
+          advancedCompatibility: { type: "array", items: { type: "string" } }
+        },
+        additionalProperties: false
+      },
+      descriptorEvaluation: {
+        type: "object",
+        required: ["status", "guidanceSource", "requiresBackendSetup", "activeSetupTaskKinds", "setupTasks", "blockers", "warnings"],
+        properties: {
+          status: { type: "string", enum: ["general_contract", "descriptor_evaluated", "blocked"] },
+          guidanceSource: { type: "string", enum: ["general_contract", "descriptor_setup"] },
+          requiresBackendSetup: { type: "boolean" },
+          activeSetupTaskKinds: {
+            type: "array",
+            items: { type: "string", enum: ["pulse", "secret", "env", "connection", "database", "review", "raw_body", "state"] }
+          },
+          setupTasks: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["kind"],
+              properties: {
+                kind: { type: "string", enum: ["pulse", "secret", "env", "connection", "database", "review", "raw_body", "state"] },
+                name: { type: "string" },
+                label: { type: "string" },
+                description: { type: "string" },
+                required: { type: "boolean" }
+              },
+              additionalProperties: false
+            }
+          },
+          blockers: { type: "array", items: { type: "string" } },
+          warnings: { type: "array", items: { type: "string" } }
+        },
+        additionalProperties: false
+      },
       whenFrontendOnlyIsEnough: { type: "array", items: { type: "string" } },
       whenYouNeedPulses: { type: "array", items: { type: "string" } },
       runnerGuidance: { type: "array", items: { type: "string" } },
@@ -2102,31 +2204,6 @@ const TOOL_OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
       JSON_ERROR_SCHEMA
     ]
   },
-  get_thread_context: {
-    oneOf: [
-      {
-        type: "object",
-        required: ["thread", "nextAction"],
-        properties: {
-          thread: {
-            type: "object",
-            required: ["comments"],
-            properties: {
-              threadId: { type: "string" },
-              postId: { type: "string" },
-              title: { type: "string" },
-              url: { type: "string" },
-              comments: { type: "array", items: JSON_SOCIAL_COMMENT_SCHEMA }
-            },
-            additionalProperties: false
-          },
-          nextAction: { type: "string" }
-        },
-        additionalProperties: false
-      },
-      JSON_ERROR_SCHEMA
-    ]
-  },
   build_share_copy: {
     oneOf: [
       {
@@ -2465,22 +2542,12 @@ const SocialProfileValidator = z.object({
 });
 
 const SocialSearchResultValidator = z.object({
-  type: z.enum(["post", "profile", "tag", "capsule", "thread", "unknown"]),
+  type: z.enum(["post", "profile", "tag", "unknown"]),
   id: z.string(),
   title: z.string(),
   url: z.string().optional(),
   description: z.string().optional(),
   authorHandle: z.string().optional()
-});
-
-const SocialCommentValidator = z.object({
-  id: z.string(),
-  body: z.string(),
-  authorHandle: z.string().optional(),
-  authorName: z.string().nullable().optional(),
-  createdAt: z.union([z.number(), z.string()]).optional(),
-  parentCommentId: z.string().nullable().optional(),
-  score: z.number().optional()
 });
 
 const RecommendedToolCallValidator = z.object({
@@ -2582,6 +2649,59 @@ const ToolOutputValidators: Record<string, z.ZodTypeAny> = {
   get_pulse_setup_guidance: z.object({
     headline: z.string(),
     summary: z.string(),
+    descriptorMetadata: z.object({
+      sourceOfTruth: z.literal("PulseDescriptor"),
+      apiVersion: z.literal("pulse/v1"),
+      normalizedDescriptorVersion: z.literal(1),
+      stateProtocolVersion: z.string(),
+      resourceConfigVersion: z.literal(1),
+      apiProjection: z.object({
+        openApiSchema: z.literal("PulseDescriptorSetupProjection"),
+        responseField: z.literal("descriptorSetup")
+      }),
+      setupTaskKinds: z.array(z.enum(["pulse", "secret", "env", "connection", "database", "review", "raw_body", "state"])),
+      activeSetupTaskKinds: z.array(z.enum(["pulse", "secret", "env", "connection", "database", "review", "raw_body", "state"])),
+      requiresBackendSetup: z.boolean(),
+      guidanceSource: z.enum(["general_contract", "descriptor_setup"]),
+      compatibility: z.object({
+        blockerCount: z.number().int(),
+        warningCount: z.number().int()
+      }),
+      runtimeEnv: z.object({
+        pulse: z.literal("env.pulse.*"),
+        fetch: z.literal("env.fetch"),
+        log: z.literal("env.log"),
+        request: z.literal("env.request"),
+        runtime: z.literal("env.runtime"),
+        waitUntil: z.literal("env.waitUntil")
+      }),
+      runtimeSemantics: z.object({
+        fetch: z.string(),
+        log: z.string(),
+        request: z.string(),
+        runtime: z.string(),
+        waitUntil: z.string(),
+        database: z.string(),
+        cleanupAuthority: z.string()
+      }),
+      descriptorOwnedSurfaces: z.array(z.string()),
+      advancedCompatibility: z.array(z.string())
+    }),
+    descriptorEvaluation: z.object({
+      status: z.enum(["general_contract", "descriptor_evaluated", "blocked"]),
+      guidanceSource: z.enum(["general_contract", "descriptor_setup"]),
+      requiresBackendSetup: z.boolean(),
+      activeSetupTaskKinds: z.array(z.enum(["pulse", "secret", "env", "connection", "database", "review", "raw_body", "state"])),
+      setupTasks: z.array(z.object({
+        kind: z.enum(["pulse", "secret", "env", "connection", "database", "review", "raw_body", "state"]),
+        name: z.string().optional(),
+        label: z.string().optional(),
+        description: z.string().optional(),
+        required: z.boolean().optional()
+      })),
+      blockers: z.array(z.string()),
+      warnings: z.array(z.string())
+    }),
     whenFrontendOnlyIsEnough: z.array(z.string()),
     whenYouNeedPulses: z.array(z.string()),
     runnerGuidance: z.array(z.string()),
@@ -2814,19 +2934,6 @@ const ToolOutputValidators: Record<string, z.ZodTypeAny> = {
     }),
     ErrorStructuredValidator
   ]),
-  get_thread_context: z.union([
-    z.object({
-      thread: z.object({
-        threadId: z.string().optional(),
-        postId: z.string().optional(),
-        title: z.string().optional(),
-        url: z.string().optional(),
-        comments: z.array(SocialCommentValidator)
-      }),
-      nextAction: z.string()
-    }),
-    ErrorStructuredValidator
-  ]),
   build_share_copy: z.union([
     z.object({
       share: z.object({
@@ -3053,10 +3160,21 @@ export function getTools(options?: { includeOutputSchema?: boolean; includeHidde
       visibility: "public",
       title: "Get Pulse Setup Guidance",
       description:
-        "Use this when the app may need backend logic, server actions, secrets, scheduled work, or webhook-style behavior. It should help the model decide when frontend-only is enough and when Vibecodr pulses are the right architecture.",
+        "Use this when the app may need backend logic, server actions, secrets, scheduled work, or webhook-style behavior. Pass descriptorSetup when available so guidance comes from the normalized PulseDescriptor projection instead of general rules.",
       securitySchemes: NOAUTH_SECURITY_SCHEMES,
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      inputSchema: {
+        type: "object",
+        properties: {
+          descriptorSetup: {
+            type: "object",
+            description:
+              "Optional PulseDescriptorSetupProjection from Vibecodr API descriptorSetup. When supplied, setup guidance is derived from its setupTasks and compatibility blockers.",
+            additionalProperties: true
+          }
+        },
+        additionalProperties: false
+      },
       outputSchema: TOOL_OUTPUT_SCHEMAS["get_pulse_setup_guidance"],
       _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
     },
@@ -3357,7 +3475,7 @@ export function getTools(options?: { includeOutputSchema?: boolean; includeHidde
       visibility: "public",
       title: "Search Vibecodr",
       description:
-        "Use this to search public Vibecodr posts, profiles, tags, threads, or capsules without account auth. It returns compact result summaries so fresh models do not guess at public social context.",
+        "Use this to search public Vibecodr posts, profiles, and tags without account auth. It accepts friendly aliases such as vibes, apps, creators, handles, hashtags, and users, and returns compact absolute-link summaries.",
       securitySchemes: NOAUTH_SECURITY_SCHEMES,
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
       inputSchema: {
@@ -3365,7 +3483,7 @@ export function getTools(options?: { includeOutputSchema?: boolean; includeHidde
         required: ["query"],
         properties: {
           query: { type: "string" },
-          types: { type: "string" },
+          types: { type: "string", description: "Optional comma-separated filter. Supported public types: post/posts/vibes/apps, profile/profiles/users/handles/creators, tag/tags/hashtags." },
           limit: { type: "integer", minimum: 1, maximum: 50 },
           offset: { type: "integer", minimum: 0, maximum: 500 }
         },
@@ -3391,27 +3509,6 @@ export function getTools(options?: { includeOutputSchema?: boolean; includeHidde
         additionalProperties: false
       },
       outputSchema: TOOL_OUTPUT_SCHEMAS["get_remix_lineage"],
-      _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
-    },
-    {
-      name: "get_thread_context",
-      visibility: "public",
-      title: "Get Thread Context",
-      description:
-        "Use this to read public thread or comment context for a Vibecodr post. It returns public comments only and does not perform moderation, author actions, or private data reads.",
-      securitySchemes: NOAUTH_SECURITY_SCHEMES,
-      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
-      inputSchema: {
-        type: "object",
-        properties: {
-          threadId: { type: "string" },
-          postId: { type: "string" },
-          limit: { type: "integer", minimum: 1, maximum: 50 },
-          offset: { type: "integer", minimum: 0, maximum: 500 }
-        },
-        additionalProperties: false
-      },
-      outputSchema: TOOL_OUTPUT_SCHEMAS["get_thread_context"],
       _meta: toolMetaBase(NOAUTH_SECURITY_SCHEMES)
     },
     {
@@ -3725,6 +3822,9 @@ async function callToolImpl(
   sessionOverride?: SessionRecord | null
 ): Promise<ToolResult> {
   const traceId = req.headers.get("x-trace-id") || undefined;
+  if (!getTools({ includeHidden: true }).some((tool) => tool.name === name)) {
+    return toolErrorResult("Unknown tool: " + name, "UNKNOWN_TOOL");
+  }
 
   if (name === "get_upload_capabilities") {
     return {
@@ -3761,7 +3861,6 @@ async function callToolImpl(
           "get_public_profile",
           "search_vibecodr",
           "get_remix_lineage",
-          "get_thread_context",
           "get_vibe_engagement_summary",
           "get_vibe_share_link",
           "build_share_copy",
@@ -3840,40 +3939,13 @@ async function callToolImpl(
   }
 
   if (name === "get_pulse_setup_guidance") {
+    const guidance = buildPulseSetupGuidance({ descriptorSetup: args["descriptorSetup"] });
     return {
       content: [{
         type: "text",
-        text:
-          "Use pulses when the app needs trusted server-side work. Keep frontend-only vibes frontend-only when the logic can safely run on the client."
+        text: guidance.summary
       }],
-      structuredContent: {
-        headline: "Choose frontend-only by default, then escalate to pulses when the app truly needs server logic.",
-        summary:
-          "A zero-context agent should not guess about backend architecture. It should recognize when the app needs secrets, external APIs, scheduled work, or trusted mutations, then use Vibecodr pulses as the backend path.",
-        whenFrontendOnlyIsEnough: [
-          "The app is purely interactive UI, local state, or deterministic client-side logic.",
-          "All required data can be bundled with the app or fetched from public endpoints safely in the browser.",
-          "There are no secrets, signed requests, or privileged mutations."
-        ],
-        whenYouNeedPulses: [
-          "The app needs secrets, API keys, signed requests, or privileged server-side access.",
-          "The app needs webhooks, scheduled jobs, background tasks, or durable side effects.",
-          "The app needs to protect provider credentials or enforce trusted business logic."
-        ],
-        runnerGuidance: [
-          "Use client-static for normal feed apps that only need frontend code.",
-          "Use webcontainer when the package needs a richer browser-based runtime or server-like dev tooling on the client side.",
-          "Use pulses for true backend/server actions instead of trying to hide secrets in frontend code."
-        ],
-        pulseBestPractices: [
-          "Keep the pulse surface narrow and name exactly what the backend action does.",
-          "Pass only the minimum data from the vibe into the pulse.",
-          "Check account capabilities before proposing additional pulses or private pulses.",
-          "Explain to the user why a pulse is needed in product language, not infrastructure jargon."
-        ],
-        accountReminder:
-          "Before promising pulse-backed behavior, call get_account_capabilities so the model knows the user's plan, pulse slot availability, and whether premium backend features are actually available."
-      }
+      structuredContent: guidance
     };
   }
 
@@ -4036,7 +4108,6 @@ async function callToolImpl(
           "get_public_profile",
           "search_vibecodr",
           "get_remix_lineage",
-          "get_thread_context",
           "get_vibe_engagement_summary",
           "get_vibe_share_link",
           "build_share_copy",
@@ -4075,7 +4146,7 @@ async function callToolImpl(
           vibes,
           source: query ? "public_discovery_search" : "public_discovery_feed",
           nextAction: vibes.length
-            ? "Inspect a public post, profile, remix lineage, or thread context before making social recommendations."
+            ? "Inspect a public post, profile, or remix lineage before making social recommendations."
             : "Try a more specific search query or inspect a known public post."
         }
       };
@@ -4097,7 +4168,6 @@ async function callToolImpl(
           context: {
             primaryActions: [
               "Open the live player link.",
-              "Read public thread context before replying or summarizing reactions.",
               "Inspect remix lineage before describing fork/remix activity."
             ],
             shareCopy: share.shortCopy
@@ -4142,7 +4212,7 @@ async function callToolImpl(
         structuredContent: {
           query,
           results,
-          nextAction: "Open the most relevant public post, profile, thread, or remix context before making a specific recommendation."
+          nextAction: "Open the most relevant public post, profile, or remix context before making a specific recommendation."
         }
       };
     } catch (error) {
@@ -4174,34 +4244,6 @@ async function callToolImpl(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return toolErrorResult("get_remix_lineage failed: " + message, "GET_REMIX_LINEAGE_FAILED", message);
-    }
-  }
-
-  if (name === "get_thread_context") {
-    try {
-      const threadId = optionalStringArg(args["threadId"]);
-      const postId = optionalStringArg(args["postId"]);
-      if (!threadId && !postId) {
-        return toolErrorResult("threadId or postId is required.", "MISSING_THREAD_TARGET");
-      }
-      const limit = parseBoundedIntegerArg(args["limit"], 20, 50);
-      const offset = parseOffsetArg(args["offset"]);
-      const thread = await deps.vibecodr.getThreadContext(
-        { ...(threadId ? { threadId } : {}), ...(postId ? { postId } : {}), limit, offset },
-        { telemetry: deps.telemetry, traceId }
-      );
-      return {
-        content: [{ type: "text", text: `Retrieved ${thread.comments.length} public comment${thread.comments.length === 1 ? "" : "s"}.` }],
-        structuredContent: {
-          thread,
-          nextAction: thread.comments.length
-            ? "Use this public thread context to answer or summarize reactions carefully."
-            : "No public thread replies were found yet; avoid implying social proof that is not present."
-        }
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return toolErrorResult("get_thread_context failed: " + message, "GET_THREAD_CONTEXT_FAILED", message);
     }
   }
 

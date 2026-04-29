@@ -109,7 +109,6 @@ Default public tools:
 - `get_public_profile`
 - `search_vibecodr`
 - `get_remix_lineage`
-- `get_thread_context`
 - `build_share_copy`
 - `get_launch_checklist`
 - `inspect_social_preview`
@@ -165,7 +164,7 @@ The MCP surface is now registered through `src/mcp/server.ts`, an SDK-aligned ad
 
 Production Code Mode is configured to require `CODEMODE_WORKER_LOADER` and fail closed when the Dynamic Worker loader is absent. Keep `CODEMODE_ENABLED=false` until the Cloudflare Worker Loader binding is provisioned in the target environment. Local tests can explicitly set `CODEMODE_REQUIRE_DYNAMIC_WORKER=false` to use the deterministic in-process fallback.
 
-Run `npm run mcp:measure` after surface changes. The current local measurement is 30 default native tools, 38 total native handlers with output schemas, 47 catalog entries, and 2 Code Mode tools. As of 2026-04-24, the Code Mode descriptor is 1,773 bytes, while exact capability schemas live behind `search` detail results instead of the two default tool descriptors.
+Run `npm run mcp:measure` after surface changes. The current local measurement is 29 default native tools, 37 total native handlers with output schemas, 46 catalog entries, and 2 Code Mode tools. As of 2026-04-29, the Code Mode descriptor is 1,773 bytes, while exact capability schemas live behind `search` detail results instead of the two default tool descriptors.
 
 Run `npm run verify` for the local gateway gate. Run `npm run verify:release` against the first staged Worker before enabling production Code Mode. Set `MCP_BASE_URL` to the staged gateway URL and optionally set `MCP_BEARER_TOKEN` to cover authenticated `execute` checks.
 
@@ -182,6 +181,7 @@ These prompts are intended to steer first-run behavior such as:
 - asking whether the user wants SEO and social preview polish for a public launch
 - asking whether the user already has a cover image or wants generated art
 - checking account capabilities before promising premium polish or pulse-backed behavior
+- teaching Pulse capability APIs only: policy-mediated `env.fetch`, structured `env.log`, sanitized `env.request`, safe `env.runtime`, and best-effort `env.waitUntil`
 - keeping recovery flows in plain language instead of dumping operation internals
 
 ## Troubleshooting

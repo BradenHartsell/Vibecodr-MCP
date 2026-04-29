@@ -22,7 +22,7 @@ Use this server when you want an agent to:
 - publish a generated app as a live vibe
 - validate a publish package before any write
 - inspect drafts or live vibes from the connected account
-- read public Vibecodr posts, profiles, threads, searches, and remix lineage
+- read public Vibecodr posts, profiles, homepage-feed discovery, search, and remix lineage
 - generate share copy, launch checklists, social-preview feedback, and next steps
 - decide when a frontend-only vibe should use pulses for trusted backend work
 - recover from a failed publish flow in plain language
@@ -82,6 +82,8 @@ When backend behavior might be needed:
 ```text
 get_pulse_setup_guidance
 ```
+
+When a `descriptorSetup` projection is available from Vibecodr API validation, pass it into `get_pulse_setup_guidance`. The returned `descriptorEvaluation` is the part that tells you whether this specific Pulse has no backend setup, has declared setup tasks, warnings, or blocking descriptor/source mismatches.
 
 Before promising account-specific features such as private visibility, custom SEO, or pulse capacity:
 
@@ -231,6 +233,8 @@ Start with:
 get_pulse_setup_guidance
 ```
 
+That guidance is descriptor-derived only when you pass the actual `descriptorSetup` projection. Without it, the tool returns general Pulse setup rules, not proof that a specific Pulse is frontend-only or backend-backed. Descriptor-backed guidance should teach capability-shaped Pulse APIs only: `env.pulse`, Vibecodr policy-mediated `env.fetch`, structured `env.log`, sanitized `env.request`, safe correlation-only `env.runtime`, and best-effort `env.waitUntil`. It should not teach raw platform bindings, dispatch details, raw authorization headers, physical storage, or owner lifecycle cleanup as runtime authority.
+
 Frontend-only is enough when:
 
 - the app is interactive UI, local state, or deterministic browser logic
@@ -263,17 +267,15 @@ get_public_post
 get_public_profile
 search_vibecodr
 get_remix_lineage
-get_thread_context
 ```
 
-These tools are for public data. They should not imply access to private drafts, private profile data, admin moderation state, or internal telemetry.
+These tools are for public data. They should not imply access to private drafts, private profile data, message-board threads, comments, admin moderation state, or internal telemetry.
 
 Useful asks:
 
 ```text
 Find recent public vibes about music toys.
 Explain this vibe's remix lineage.
-Summarize the public thread around this post.
 Show me what this creator publishes.
 ```
 

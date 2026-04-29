@@ -129,11 +129,80 @@ export type LaunchBestPractices = {
 export type PulseSetupGuidance = {
   headline: string;
   summary: string;
+  descriptorMetadata: PulseDescriptorSetupMetadata;
+  descriptorEvaluation: PulseDescriptorSetupEvaluation;
   whenFrontendOnlyIsEnough: string[];
   whenYouNeedPulses: string[];
   runnerGuidance: string[];
   pulseBestPractices: string[];
   accountReminder: string;
+};
+
+export type PulseDescriptorSetupTaskKind =
+  | "pulse"
+  | "secret"
+  | "env"
+  | "connection"
+  | "database"
+  | "review"
+  | "raw_body"
+  | "state";
+
+export type PulseDescriptorSetupTaskSummary = {
+  kind: PulseDescriptorSetupTaskKind;
+  name?: string;
+  label?: string;
+  description?: string;
+  required?: boolean;
+};
+
+export type PulseDescriptorSetupEvaluation = {
+  status: "general_contract" | "descriptor_evaluated" | "blocked";
+  guidanceSource: "general_contract" | "descriptor_setup";
+  requiresBackendSetup: boolean;
+  activeSetupTaskKinds: PulseDescriptorSetupTaskKind[];
+  setupTasks: PulseDescriptorSetupTaskSummary[];
+  blockers: string[];
+  warnings: string[];
+};
+
+export type PulseDescriptorSetupMetadata = {
+  sourceOfTruth: "PulseDescriptor";
+  apiVersion: "pulse/v1";
+  normalizedDescriptorVersion: number;
+  stateProtocolVersion: string;
+  resourceConfigVersion: number;
+  apiProjection: {
+    openApiSchema: "PulseDescriptorSetupProjection";
+    responseField: "descriptorSetup";
+  };
+  setupTaskKinds: PulseDescriptorSetupTaskKind[];
+  activeSetupTaskKinds: PulseDescriptorSetupTaskKind[];
+  requiresBackendSetup: boolean;
+  guidanceSource: PulseDescriptorSetupEvaluation["guidanceSource"];
+  compatibility: {
+    blockerCount: number;
+    warningCount: number;
+  };
+  runtimeEnv: {
+    pulse: "env.pulse.*";
+    fetch: "env.fetch";
+    log: "env.log";
+    request: "env.request";
+    runtime: "env.runtime";
+    waitUntil: "env.waitUntil";
+  };
+  runtimeSemantics: {
+    fetch: string;
+    log: string;
+    request: string;
+    runtime: string;
+    waitUntil: string;
+    database: string;
+    cleanupAuthority: string;
+  };
+  descriptorOwnedSurfaces: string[];
+  advancedCompatibility: string[];
 };
 
 export type EncodedFile = {
@@ -312,22 +381,12 @@ export type SocialProfileSummary = CurrentUserProfileSummary & {
 };
 
 export type SocialSearchResult = {
-  type: "post" | "profile" | "tag" | "capsule" | "thread" | "unknown";
+  type: "post" | "profile" | "tag" | "unknown";
   id: string;
   title: string;
   url?: string | undefined;
   description?: string | undefined;
   authorHandle?: string | undefined;
-};
-
-export type SocialCommentSummary = {
-  id: string;
-  body: string;
-  authorHandle?: string | undefined;
-  authorName?: string | null | undefined;
-  createdAt?: number | string | undefined;
-  parentCommentId?: string | null | undefined;
-  score?: number | undefined;
 };
 
 export type RemixLineageSummary = {
@@ -341,14 +400,6 @@ export type RemixLineageSummary = {
     authorHandle?: string | undefined;
     createdAt?: number | string | undefined;
   }>;
-};
-
-export type ThreadContextSummary = {
-  threadId?: string | undefined;
-  postId?: string | undefined;
-  title?: string | undefined;
-  url?: string | undefined;
-  comments: SocialCommentSummary[];
 };
 
 export type OperationWatchResult = {

@@ -83,11 +83,12 @@ await evaluate("public social read tools are noauth read-only", () => {
     "get_public_post",
     "get_public_profile",
     "search_vibecodr",
-    "get_remix_lineage",
-    "get_thread_context"
+    "get_remix_lineage"
   ]) {
     assertToolShape(name, { readOnly: true, destructive: false, authRequired: false });
   }
+  assert.equal(publicTool("get_thread_context"), undefined);
+  assert.equal(allTool("get_thread_context"), undefined);
 });
 
 await evaluate("post-publish polish helpers are OAuth read-only", () => {
@@ -122,7 +123,6 @@ await evaluate("capability catalog classifies social and resume capabilities", (
     "native.get_public_profile",
     "native.search_vibecodr",
     "native.get_remix_lineage",
-    "native.get_thread_context",
     "native.build_share_copy"
   ]) {
     assert.equal(catalog.find((entry) => entry.id === id)?.namespace, "social", id + " namespace mismatch");

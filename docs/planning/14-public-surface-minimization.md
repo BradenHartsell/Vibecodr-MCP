@@ -47,7 +47,6 @@ Default `tools/list` currently exposes these product-level tools:
 - `get_public_profile`
 - `search_vibecodr`
 - `get_remix_lineage`
-- `get_thread_context`
 - `build_share_copy`
 - `get_launch_checklist`
 - `inspect_social_preview`
@@ -104,7 +103,6 @@ The normal path is no-write preparation, explicit user confirmation, quick publi
 - `get_public_profile`
 - `search_vibecodr`
 - `get_remix_lineage`
-- `get_thread_context`
 
 These tools let agents inspect public social context and the connected user's live vibes without exposing private account data, raw source, moderation internals, or social mutations.
 

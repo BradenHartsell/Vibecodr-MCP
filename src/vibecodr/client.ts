@@ -7,10 +7,8 @@ import type {
   PublishVisibility,
   RemixLineageSummary,
   RunnerType,
-  SocialCommentSummary,
   SocialProfileSummary,
   SocialSearchResult,
-  ThreadContextSummary,
   VibecodrQuotaSummary,
   VibeEngagementSummary,
   VibeShareSummary,
@@ -511,6 +509,8 @@ export class VibecodrClient {
     meta?: UpstreamRequestMeta
   ): Promise<LiveVibeSummary[]> {
     const params = new URLSearchParams();
+    params.set("mode", "latest");
+    params.set("surface", "feed");
     if (typeof input.limit === "number") params.set("limit", String(input.limit));
     if (typeof input.offset === "number") params.set("offset", String(input.offset));
     if (input.query?.trim()) params.set("q", input.query.trim());
@@ -548,7 +548,8 @@ export class VibecodrClient {
     meta?: UpstreamRequestMeta
   ): Promise<SocialSearchResult[]> {
     const params = new URLSearchParams({ q: input.query });
-    if (input.types?.trim()) params.set("types", input.types.trim());
+    const normalizedTypes = normalizeSearchTypes(input.types);
+    if (normalizedTypes) params.set("types", normalizedTypes);
     if (typeof input.limit === "number") params.set("limit", String(input.limit));
     if (typeof input.offset === "number") params.set("offset", String(input.offset));
     const data = await this.publicReq("GET", "/search?" + params.toString(), meta);
@@ -575,33 +576,6 @@ export class VibecodrClient {
       remixes: extractCollection(data, ["remixes", "children", "nodes", "capsules"])
         .map((item) => this.toRemixSummary(item))
         .filter((item): item is RemixLineageSummary["remixes"][number] => Boolean(item))
-    };
-  }
-
-  async getThreadContext(
-    input: { threadId?: string; postId?: string; limit?: number; offset?: number },
-    meta?: UpstreamRequestMeta
-  ): Promise<ThreadContextSummary> {
-    const id = input.threadId || input.postId;
-    if (!id) throw new Error("threadId or postId is required.");
-    const params = new URLSearchParams();
-    if (typeof input.limit === "number") params.set("limit", String(input.limit));
-    if (typeof input.offset === "number") params.set("offset", String(input.offset));
-    const query = params.toString();
-    const path = input.threadId
-      ? "/threads/" + encodeURIComponent(input.threadId)
-      : "/posts/" + encodeURIComponent(id) + "/comments" + (query ? "?" + query : "");
-    const data = await this.publicReq("GET", path, meta);
-    const thread = readRecord(readRecord(data)["thread"] ?? data);
-    const comments = extractCollection(data, ["comments", "replies"])
-      .map((item) => this.toCommentSummary(item))
-      .filter((item): item is SocialCommentSummary => Boolean(item));
-    return {
-      ...(input.threadId ? { threadId: input.threadId } : {}),
-      ...(input.postId ? { postId: input.postId } : {}),
-      ...(readString(thread["title"]) ? { title: readString(thread["title"]) } : {}),
-      ...(input.threadId ? { url: this.webBase + "/conversations/" + encodeURIComponent(input.threadId) } : {}),
-      comments
     };
   }
 
@@ -734,32 +708,29 @@ export class VibecodrClient {
     const id = readString(item["id"]) || readString(item["postId"]) || readString(item["userId"]) || readString(item["tag"]) || "";
     const title = readString(item["title"]) || readString(item["name"]) || readString(item["handle"]) || readString(item["tag"]) || "";
     if (!id || !title) return null;
+    const url = this.toPublicWebUrl(readString(item["url"]));
     return {
       type,
       id,
       title,
-      ...(readString(item["url"]) ? { url: readString(item["url"]) } : type === "post" ? { url: this.webBase + "/post/" + encodeURIComponent(id) } : {}),
+      ...(url ? { url } : type === "post" ? { url: this.webBase + "/post/" + encodeURIComponent(id) } : {}),
       ...(readString(item["description"]) || readString(item["tagline"]) ? { description: readString(item["description"]) || readString(item["tagline"]) } : {}),
       ...(readString(item["authorHandle"]) || readString(item["handle"]) ? { authorHandle: readString(item["authorHandle"]) || readString(item["handle"]) } : {})
     };
   }
 
-  private toCommentSummary(raw: unknown): SocialCommentSummary | null {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-    const comment = raw as Record<string, unknown>;
-    const id = readString(comment["id"]) || readString(comment["commentId"]) || "";
-    const body = readString(comment["body"]) || readString(comment["text"]) || "";
-    if (!id || !body) return null;
-    const author = readRecord(comment["author"] ?? comment["user"]);
-    return {
-      id,
-      body,
-      ...(readString(author["handle"]) || readString(comment["authorHandle"]) ? { authorHandle: readString(author["handle"]) || readString(comment["authorHandle"]) } : {}),
-      ...(readString(author["name"]) || readString(comment["authorName"]) ? { authorName: readString(author["name"]) || readString(comment["authorName"]) || null } : {}),
-      ...(comment["createdAt"] !== undefined && (typeof comment["createdAt"] === "number" || typeof comment["createdAt"] === "string") ? { createdAt: comment["createdAt"] } : {}),
-      ...(Object.prototype.hasOwnProperty.call(comment, "parentCommentId") ? { parentCommentId: readString(comment["parentCommentId"]) || null } : {}),
-      ...(comment["votesScore"] !== undefined || comment["score"] !== undefined ? { score: toNumber(comment["votesScore"] ?? comment["score"]) } : {})
-    };
+  private toPublicWebUrl(value: string | undefined): string | undefined {
+    if (!value) return undefined;
+    try {
+      const webBase = new URL(this.webBase);
+      const url = new URL(value, webBase.href.endsWith("/") ? webBase.href : webBase.href + "/");
+      if ((url.protocol === "https:" || url.protocol === "http:") && url.origin === webBase.origin) {
+        return url.toString();
+      }
+    } catch {
+      return undefined;
+    }
+    return undefined;
   }
 
   private toRemixSummary(raw: unknown): RemixLineageSummary["remixes"][number] | null {
@@ -851,8 +822,51 @@ function extractCollection(raw: unknown, keys: string[]): Record<string, unknown
   return [];
 }
 
+type PublicSearchApiType = "post" | "user" | "tag";
+
+function normalizeSearchTypes(value: string | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  const selected: PublicSearchApiType[] = [];
+  const unsupported: string[] = [];
+  const tokens = value
+    .split(/[,\s|]+/)
+    .map((token) => token.trim().toLowerCase().replace(/^[@#]+/, ""))
+    .filter(Boolean);
+
+  for (const token of tokens) {
+    const type = toPublicSearchApiType(token);
+    if (type && !selected.includes(type)) selected.push(type);
+    if (!type && !unsupported.includes(token)) unsupported.push(token);
+  }
+
+  if (selected.length === 0 || unsupported.length > 0) {
+    throw Object.assign(
+      new Error(
+        unsupported.length > 0
+          ? `Unsupported search type filter: ${unsupported.join(", ")}. Supported public search types are posts, profiles, and tags.`
+          : "Unsupported search type filter. Supported public search types are posts, profiles, and tags."
+      ),
+      { code: "UNSUPPORTED_SEARCH_TYPES" }
+    );
+  }
+  return selected.join(",");
+}
+
+function toPublicSearchApiType(value: string): PublicSearchApiType | undefined {
+  if (value === "post" || value === "posts" || value === "vibe" || value === "vibes" || value === "app" || value === "apps" || value === "creation" || value === "creations") {
+    return "post";
+  }
+  if (value === "user" || value === "users" || value === "profile" || value === "profiles" || value === "creator" || value === "creators" || value === "handle" || value === "handles" || value === "person" || value === "people") {
+    return "user";
+  }
+  if (value === "tag" || value === "tags" || value === "hashtag" || value === "hashtags" || value === "topic" || value === "topics") {
+    return "tag";
+  }
+  return undefined;
+}
+
 function toSearchType(value: unknown): SocialSearchResult["type"] {
-  if (value === "post" || value === "profile" || value === "tag" || value === "capsule" || value === "thread") return value;
+  if (value === "post" || value === "profile" || value === "tag") return value;
   if (value === "user") return "profile";
   return "unknown";
 }

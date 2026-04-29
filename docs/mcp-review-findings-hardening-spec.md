@@ -61,7 +61,7 @@ The MCP gateway must remain small in default discovery while still being underst
   - `action`
   - `userMessage`
   - `requiredArgument: "confirmed"`
-- `publish_draft_capsule`, `update_live_vibe_metadata`, future pulse mutations, cancellation, archive, restore, delete, and any Code Mode mutating capability use the same guard pattern.
+- `publish_draft_capsule`, `update_live_vibe_metadata`, future pulse mutations, cancellation, archive, restore, and any Code Mode mutating capability use the same guard pattern. Pulse lifecycle removal and cleanup authority stay out of MCP planning until the main platform owns the contract.
 
 ### Tests
 
@@ -367,13 +367,13 @@ Initial native tools:
 - `run_pulse`
 - `archive_pulse`
 - `restore_pulse`
-- `delete_pulse`
-- `get_pulse_wfp_status`
+- `get_pulse_status`
 
 Rules:
 
 - Owner-auth required.
 - Mutations require `confirmed: true`.
+- Pulse removal, account lifecycle cleanup, and state-resource cleanup are not Phase 2 MCP capabilities. They must wait for a main-platform lifecycle contract before any gateway tool or catalog entry names them.
 - Public output must not expose source, `.pulse` contents, dispatch tokens, secret values, raw logs, deployment internals, or public pulse projection internals.
 - Public vibe/post projections may expose `hasPrivateBackend` only.
 
@@ -393,7 +393,6 @@ Initial native tools:
 - `get_public_profile`
 - `search_vibecodr`
 - `get_remix_lineage`
-- `get_thread_context`
 
 Rules:
 
@@ -404,7 +403,7 @@ Rules:
 
 Main Vibecodr dependency:
 
-- Use existing feed, profile, search, thread, and remix endpoints.
+- Use existing feed, profile, search, and remix endpoints.
 - Add a consolidated `post context` projection if the MCP would otherwise need to chain too many reads.
 
 ### Post-Publish Polish Helpers
@@ -439,7 +438,7 @@ Eval scenarios:
 2. Fresh model resumes a publish flow without operation id.
 3. Fresh model fetches exact Code Mode detail before execute.
 4. Dynamic Worker and fallback return equivalent behavior for top-level `query`, `capabilityId`, `arguments`, and `confirmed`.
-5. Fresh model uses social read tools to understand a live vibe, profile, remix lineage, and thread context.
+5. Fresh model uses social read tools to understand a live vibe, profile, search result, and remix lineage.
 6. Fresh model uses pulse tools without exposing private backend internals.
 7. Fresh model produces post-publish polish from live context.
 8. Catalog-only capabilities are not executed.

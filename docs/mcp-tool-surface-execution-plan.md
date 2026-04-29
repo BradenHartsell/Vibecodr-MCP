@@ -6,12 +6,12 @@ Last updated: 2026-04-24
 
 Implemented in this repo:
 
-- default `tools/list` remains product-shaped at 30 public tools
+- default `tools/list` remains product-shaped at 29 public tools
 - `explain_operation_failure` moved to hidden recovery while staying callable by exact name
 - `prepare_publish_package` and `validate_creation_payload` added as no-write creation package validation/prep tools
 - `get_runtime_readiness` added as the public blocker/next-action runtime read
 - `resume_latest_publish_flow` added so agents can continue from recent account history without asking users for operation ids
-- public social read tools added for discovery, post, profile, search, remix lineage, and thread context
+- public social read tools added for homepage discovery, post, profile, search, and remix lineage
 - post-publish polish helpers added for share copy, launch checklist, social preview, next-step suggestions, and engagement follow-up
 - `src/mcp/capabilityCatalog.ts` added with native handler coverage and catalog entries for publish lanes, runtime, pulses, social, ops, and policy
 - `/mcp?codemode=search_and_execute` added as an opt-in Code Mode route exposing only `search` and `execute`
@@ -60,8 +60,8 @@ Use this split:
 
 The gateway currently has:
 
-- 30 default visible MCP tools
-- 38 total native handlers when hidden compatibility tools are included
+- 29 default visible MCP tools
+- 37 total native handlers when hidden compatibility tools are included
 - prompts for guided publish, launch polish, publish recovery, and pulse decisioning
 - widget surface removed
 - hidden handlers still callable by exact name for compatibility and regression coverage
@@ -118,7 +118,6 @@ The public read suite is now implemented as native tools with compact summaries:
 - `get_public_post`
 - `get_public_profile`
 - `search_vibecodr`
-- `get_thread_context`
 - `get_remix_lineage`
 
 Keep this read-first. Do not expose low-level social writes by default.
@@ -149,13 +148,13 @@ Potential visible owner-facing pulse tools:
 - `run_pulse`
 - `archive_pulse`
 - `restore_pulse`
-- `delete_pulse`
-- `get_pulse_wfp_status`
+- `get_pulse_status`
 
 Rules:
 
 - destructive pulse tools must require explicit confirmation
 - `run_pulse` is an execution interface, not a source/projection interface
+- Pulse removal and resource cleanup tools are intentionally absent until the main Vibecodr platform owns a tested lifecycle contract for that work.
 - do not expose pulse source, `.pulse` contents, dispatch tokens, secret inventory, or public projection internals
 
 ### Hidden Recovery Tools
@@ -185,8 +184,6 @@ Future hidden recovery namespaces:
 - `query_runtime_telemetry`
 - `recover_cloudflare_worker`
 - `pulse_wfp_complete`
-- `pulse_wfp_cleanup`
-- `pulse_orphan_cleanup`
 - `get_moderation_visibility_state`
 
 Rules:
@@ -194,7 +191,7 @@ Rules:
 - hidden recovery tools may read operational evidence
 - hidden recovery tools may require stronger auth, role, or deployment gating
 - hidden recovery tools should summarize, not dump raw internal rows
-- mutation and cleanup actions must be confirmation-gated
+- mutation actions must be confirmation-gated
 
 ### Prompts And Skills
 
@@ -478,14 +475,14 @@ Goal: let agents help with live social workflows without becoming an admin panel
 
 Tasks:
 
-- Add read-only catalog entries for feed/post/profile/thread/search/remix.
+- Add read-only catalog entries for feed/post/profile/search/remix.
 - Add native tools with stable response summaries.
 - Keep moderation and visibility recovery hidden.
 - Keep low-level moderation and social mutation out of default discovery.
 
 Acceptance:
 
-- Agents can inspect and explain live vibes, public profiles, threads, and remix lineage.
+- Agents can inspect and explain live vibes, public profiles, and remix lineage.
 - Agents cannot perform broad social mutations by default.
 - Moderation/admin state remains hidden recovery.
 

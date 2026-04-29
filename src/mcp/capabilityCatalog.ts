@@ -1,4 +1,5 @@
 import { getTools } from "./tools.js";
+import { PULSE_DESCRIPTOR_SETUP_METADATA } from "./pulseDescriptorMetadata.js";
 
 export type CapabilityVisibility = "public" | "recovery" | "internal" | "catalog";
 export type CapabilityKind = "native_tool" | "prompt" | "catalog_entry" | "not_mcp";
@@ -66,7 +67,6 @@ function namespaceForNativeTool(name: string): CapabilityCatalogEntry["namespace
     name === "get_public_profile" ||
     name === "search_vibecodr" ||
     name === "get_remix_lineage" ||
-    name === "get_thread_context" ||
     name === "build_share_copy" ||
     name === "get_launch_checklist" ||
     name === "inspect_social_preview" ||
@@ -355,7 +355,7 @@ const manualEntries: CapabilityCatalogEntry[] = [
     id: "pulses.lifecycle",
     namespace: "pulses",
     title: "Pulse Lifecycle",
-    purpose: "Owner-facing pulse lifecycle capability for list/get/create/update/run/archive/restore/delete/status.",
+    purpose: "Owner-facing pulse lifecycle capability for list/get/create/update/run/archive/restore/status.",
     visibility: "catalog",
     kind: "catalog_entry",
     executionStatus: "catalog_only",
@@ -369,7 +369,7 @@ const manualEntries: CapabilityCatalogEntry[] = [
       properties: {
         action: {
           type: "string",
-          enum: ["list", "get", "create", "update", "run", "archive", "restore", "delete", "status"]
+          enum: ["list", "get", "create", "update", "run", "archive", "restore", "status"]
         },
         pulseId: { type: "string" },
         payload: { type: "object", additionalProperties: true },
@@ -383,13 +383,16 @@ const manualEntries: CapabilityCatalogEntry[] = [
       "Mutating actions require confirmed: true and owner auth."
     ],
     keywords: ["pulse", "backend", "server", "worker", "lifecycle", "run"],
-    notes: ["Expose interface and lifecycle, not implementation, dispatch tokens, secrets, or source projection."]
+    notes: [
+      `${PULSE_DESCRIPTOR_SETUP_METADATA.sourceOfTruth} ${PULSE_DESCRIPTOR_SETUP_METADATA.apiVersion} owns setup metadata before lifecycle guidance is shown.`,
+      "Expose interface and lifecycle, not implementation, dispatch tokens, secrets, or source projection."
+    ]
   },
   {
     id: "social.read",
     namespace: "social",
     title: "Social Read Suite",
-    purpose: "Read public social surfaces such as feed, post, profile, thread, search, and remix lineage.",
+    purpose: "Read public social surfaces such as the homepage feed, posts, profiles, search, and remix lineage.",
     visibility: "catalog",
     kind: "catalog_entry",
     executionStatus: "catalog_only",
@@ -403,12 +406,11 @@ const manualEntries: CapabilityCatalogEntry[] = [
       properties: {
         target: {
           type: "string",
-          enum: ["feed", "post", "profile", "thread", "search", "remix_lineage"]
+          enum: ["feed", "post", "profile", "search", "remix_lineage"]
         },
         query: { type: "string" },
         postId: { type: "string" },
         handle: { type: "string" },
-        threadId: { type: "string" },
         capsuleId: { type: "string" },
         limit: { type: "integer", minimum: 1, maximum: 50 }
       },
@@ -416,12 +418,12 @@ const manualEntries: CapabilityCatalogEntry[] = [
     },
     argumentSummary: [
       "Required: target.",
-      "Optional: query, postId, handle, threadId, capsuleId, limit.",
+      "Optional: query, postId, handle, capsuleId, limit.",
       "Read public social context only; no social mutations."
     ],
-    keywords: ["feed", "post", "profile", "thread", "search", "remix", "share"],
+    keywords: ["feed", "post", "profile", "search", "remix", "share"],
     notes: [
-      "Native public tools now implement each read path: discover_vibes, get_public_post, get_public_profile, search_vibecodr, get_remix_lineage, and get_thread_context.",
+      "Native public tools now implement each read path: discover_vibes, get_public_post, get_public_profile, search_vibecodr, and get_remix_lineage.",
       "Keep read-first. Subjective share/profile/title polish belongs in prompts or skills."
     ]
   },

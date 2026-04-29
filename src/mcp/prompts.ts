@@ -1,3 +1,5 @@
+import { pulseDescriptorDecisionRequirements } from "./pulseDescriptorMetadata.js";
+
 type PromptArgument = {
   name: string;
   description: string;
@@ -219,10 +221,7 @@ const PROMPT_BUILDERS: PromptBuilder[] = [
                 buildContextBlock("App requirements", appRequirements),
                 "",
                 "Decision requirements:",
-                "- Start with get_pulse_setup_guidance.",
-                "- If the user is connected, call get_account_capabilities before promising pulse-backed behavior.",
-                "- Default to frontend-only when the app does not need secrets, trusted mutations, webhooks, schedules, or durable backend side effects.",
-                "- Recommend pulses only when the product requirements clearly need trusted server-side work.",
+                ...pulseDescriptorDecisionRequirements().map((requirement) => `- ${requirement}`),
                 "- Explain the recommendation in product language, not infrastructure jargon."
               ].join("\n")
             }

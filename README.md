@@ -284,7 +284,6 @@ Default `tools/list` intentionally exposes the product-level surface only:
 - `get_public_profile`
 - `search_vibecodr`
 - `get_remix_lineage`
-- `get_thread_context`
 - `build_share_copy`
 - `get_launch_checklist`
 - `inspect_social_preview`
