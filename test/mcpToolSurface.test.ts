@@ -238,7 +238,11 @@ test("pulse setup guidance exposes normalized descriptor metadata", async () => 
   });
   assert.match(structured.descriptorMetadata?.runtimeSemantics?.fetch || "", /policy-mediated fetch/);
   assert.match(structured.descriptorMetadata?.runtimeSemantics?.secrets || "", /does not expose raw secret values/);
-  assert.match(structured.descriptorMetadata?.runtimeSemantics?.webhooks || "", /bounded raw body/);
+  assert.match(structured.descriptorMetadata?.runtimeSemantics?.webhooks || "", /first provider helper/);
+  assert.match(structured.descriptorMetadata?.runtimeSemantics?.webhooks || "", /env\.secrets\.verifyHmac/);
+  assert.match(structured.descriptorMetadata?.runtimeSemantics?.webhooks || "", /github-sha256/);
+  assert.match(structured.descriptorMetadata?.runtimeSemantics?.webhooks || "", /shopify-hmac-sha256/);
+  assert.match(structured.descriptorMetadata?.runtimeSemantics?.webhooks || "", /slack-v0/);
   assert.match(structured.descriptorMetadata?.runtimeSemantics?.connections || "", /provider tokens/);
   assert.match(structured.descriptorMetadata?.runtimeSemantics?.log || "", /structured event records/);
   assert.match(structured.descriptorMetadata?.runtimeSemantics?.request || "", /sanitized by default/);

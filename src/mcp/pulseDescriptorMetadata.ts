@@ -51,7 +51,8 @@ export const PULSE_DESCRIPTOR_SETUP_METADATA: PulseDescriptorSetupMetadata = {
   runtimeSemantics: {
     fetch: "env.fetch is Vibecodr policy-mediated fetch, not raw platform fetch.",
     secrets: "env.secrets exposes policy-bound auth and verification helpers; it does not expose raw secret values.",
-    webhooks: "env.webhooks.verify(\"stripe\") verifies the exact bounded raw body before trusted event parsing.",
+    webhooks:
+      "env.webhooks.verify(\"stripe\") is the first provider helper, not the whole webhook model; non-Stripe signed webhooks use env.secrets.verifyHmac with format presets such as github-sha256, shopify-hmac-sha256, or slack-v0 until fixture-backed helpers ship.",
     connections: "env.connections.use(provider).fetch keeps provider tokens and refresh logic platform-owned.",
     log: "env.log accepts structured event records instead of raw variadic logging.",
     request: "env.request is sanitized by default; raw-body access is explicit, bounded, and still sanitized.",
@@ -122,7 +123,7 @@ export function buildPulseSetupGuidance(input?: { descriptorSetup?: unknown }): 
       "Pass only the minimum data from the vibe into the pulse.",
       "Use descriptor setup tasks for pulse values, policy-bound secrets, connections, raw body, and state placeholders.",
       ...descriptorEvaluation.setupTasks.map((task) => formatSetupTaskPractice(task)),
-      "Use env.fetch with env.secrets.bearer/header/query, env.webhooks.verify(\"stripe\"), env.connections.use(provider).fetch, structured logging, sanitized requests, safe runtime correlation ids, and best-effort waitUntil language.",
+      "Use env.fetch with env.secrets.bearer/header/query, env.webhooks.verify(\"stripe\") for the first provider helper, env.secrets.verifyHmac with github-sha256, shopify-hmac-sha256, or slack-v0 format presets for non-Stripe signed webhooks until helpers have fixtures, env.connections.use(provider).fetch, structured logging, sanitized requests, safe runtime correlation ids, and best-effort waitUntil language.",
       "Check account capabilities before promising additional pulses or private pulses."
     ],
     accountReminder:
